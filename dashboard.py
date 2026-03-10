@@ -301,7 +301,7 @@ def _fetch_worker(tickers: tuple, out: dict) -> None:
         out["debug"] = f"Fetch error: {str(e)}"
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def fetch_live_prices(tickers: tuple) -> tuple[dict, str]:
     """Fetch in background thread, hard 12 s wall-clock cap."""
     import threading
