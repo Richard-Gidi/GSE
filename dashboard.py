@@ -167,90 +167,111 @@ def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
     """
     Parse afx.kwayisi.org/gse/ HTML directly with BeautifulSoup.
 
-    The page has ONE main stock table (inside <div class="t">) with columns:
+    Table structure:
         Ticker | Name | Volume | Price | Change
-
-    Each Ticker cell is:  <td><a href="...gse/mtngh.html">MTNGH</a></td>
-    Price / Change cells: plain text <td>6.36</td>  or  <td class="hi">+0.42</td>
     """
+
     from bs4 import BeautifulSoup
 
     norm_to_orig = {_normalize(t): t for t in tickers}
-    wanted_norm  = set(norm_to_orig.keys())
-    results, debug = {}, []
+    wanted_norm = set(norm_to_orig.keys())
+
+    results = {}
+    debug = []
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # The main table sits inside <div class="t">
+    # find container
     container = soup.find("div", class_="t")
-    table = container.find("table") if container else None
 
-    # Fallback: find any table whose header contains "Ticker"
-    if table is None:
-        for tbl in soup.find_all("table"):
-            headers = [th.get_text(strip=True) for th in tbl.find_all("th")]
-            if "Ticker" in headers:
-                table = tbl
-                debug.append("Found table via header fallback")
-                break
-
-    if table is None:
-        debug.append("❌ Could not find stock table in HTML")
-        # Show what tables exist
-        for i, tbl in enumerate(soup.find_all("table")):
-            hdrs = [th.get_text(strip=True) for th in tbl.find_all("th")][:6]
-            debug.append(f"  Table {i} headers: {hdrs}")
+    if not container:
+        debug.append("❌ Could not find div.t container")
         return {}, "\n".join(debug)
 
-    # Identify column positions from <thead>
+    table = container.find("table")
+
+    if not table:
+        debug.append("❌ Could not find stock table")
+        return {}, "\n".join(debug)
+
     headers = [th.get_text(strip=True) for th in table.find_all("th")]
-    debug.append(f"Table headers: {headers}")
+    debug.append(f"Headers found: {headers}")
 
     try:
         ticker_idx = headers.index("Ticker")
-        price_idx  = headers.index("Price")
+        price_idx = headers.index("Price")
         change_idx = headers.index("Change") if "Change" in headers else None
     except ValueError as e:
-        debug.append(f"❌ Missing expected column: {e}")
+        debug.append(f"❌ Expected column missing: {e}")
+        return {}, "\n".join(debug)
+
+    tbody = table.find("tbody")
+
+    if not tbody:
+        debug.append("⚠ No tbody found")
         return {}, "\n".join(debug)
 
     matched = 0
-    for tr in table.find("tbody").find_all("tr"):
+
+    for tr in tbody.find_all("tr"):
+
+        # Skip suspended stocks
+        if "ss" in (tr.get("class") or []):
+            continue
+
         cells = tr.find_all("td")
+
         if len(cells) <= price_idx:
             continue
 
         ticker_raw = cells[ticker_idx].get_text(strip=True)
-        sym_norm   = _normalize(ticker_raw)
+
+        if not ticker_raw:
+            continue
+
+        sym_norm = _normalize(ticker_raw)
+
         if sym_norm not in wanted_norm:
             continue
 
         price_raw = cells[price_idx].get_text(strip=True)
-        price     = _to_float(price_raw)
+        price = _to_float(price_raw)
+
         if not price or price <= 0:
             continue
 
-        chg_abs = 0.0
-        if change_idx is not None and len(cells) > change_idx:
-            chg_abs = _to_float(cells[change_idx].get_text(strip=True)) or 0.0
+        change_abs = 0.0
 
-        prev    = price - chg_abs
-        chg_pct = (chg_abs / prev * 100) if prev else 0.0
+        if change_idx is not None and len(cells) > change_idx:
+            change_abs = _to_float(cells[change_idx].get_text(strip=True)) or 0.0
+
+        prev = price - change_abs
+        change_pct = (change_abs / prev * 100) if prev else 0.0
+
+        price = round(price, 4)
+        change_abs = round(change_abs, 4)
+        change_pct = round(change_pct, 2)
 
         orig = norm_to_orig[sym_norm]
+
         results[orig] = {
-            "price":      price,
-            "source":     "afx.kwayisi.org ✓",
-            "change_pct": round(chg_pct, 2),
-            "change_abs": round(chg_abs, 4),
+            "price": price,
+            "source": "afx.kwayisi.org ✓",
+            "change_pct": change_pct,
+            "change_abs": change_abs,
         }
-        debug.append(f"  ✓ {orig}: {price} (chg {chg_abs:+.4f}, {chg_pct:+.2f}%)")
+
+        debug.append(f"✓ {orig}: {price} (Δ {change_abs:+.4f}, {change_pct:+.2f}%)")
+
         matched += 1
 
-    still = [t for t in tickers if t not in results]
-    if still:
-        debug.append(f"⚠ No price found for: {still}")
-    debug.append(f"Matched: {matched}/{len(tickers)}")
+    still_missing = [t for t in tickers if t not in results]
+
+    if still_missing:
+        debug.append(f"⚠ Missing prices for: {still_missing}")
+
+    debug.append(f"Matched {matched}/{len(tickers)} requested tickers")
+
     return results, "\n".join(debug)
 
 
