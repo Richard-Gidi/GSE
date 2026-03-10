@@ -257,8 +257,10 @@ def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
     return results, "\n".join(debug)
 
 
-def _fetch_worker(tickers: tuple, out: dict) -> None:
-    """Fetch afx.kwayisi.org using full browser headers"""
+
+@st.cache_data(ttl=30, show_spinner=False)
+def fetch_live_prices(tickers: tuple) -> tuple[dict, str]:
+    """Fetch prices directly (no threading)."""
 
     import requests, urllib3
     urllib3.disable_warnings()
@@ -266,17 +268,14 @@ def _fetch_worker(tickers: tuple, out: dict) -> None:
     debug = []
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1"
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html"
     }
 
     try:
 
         r = requests.get(
-            _AFX_URL,
+            "https://afx.kwayisi.org/gse/",
             headers=headers,
             timeout=10,
             verify=False
@@ -286,32 +285,15 @@ def _fetch_worker(tickers: tuple, out: dict) -> None:
         debug.append(f"HTML size: {len(r.text)}")
 
         if r.status_code != 200:
-            out["results"] = {}
-            out["debug"] = "\n".join(debug)
-            return
+            return {}, "\n".join(debug)
 
         results, parse_debug = _parse_afx_html(r.text, tickers)
 
-        out["results"] = results
-        out["debug"] = "\n".join(debug) + "\n" + parse_debug
+        return results, "\n".join(debug) + "\n" + parse_debug
 
     except Exception as e:
 
-        out["results"] = {}
-        out["debug"] = f"Fetch error: {str(e)}"
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def fetch_live_prices(tickers: tuple) -> tuple[dict, str]:
-    """Fetch in background thread, hard 12 s wall-clock cap."""
-    import threading
-    out = {"results": {}, "debug": "Thread did not complete."}
-    t   = threading.Thread(target=_fetch_worker, args=(tickers, out), daemon=True)
-    t.start()
-    t.join(timeout=12)
-    return out["results"], out["debug"]
-
-
+        return {}, f"Fetch error: {str(e)}"
 
 
 
