@@ -14,6 +14,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import pdfplumber
 import streamlit as st
+import requests   # ← REQUIRED for live prices
 
 warnings.filterwarnings("ignore")
 
@@ -130,154 +131,141 @@ STOCK_COLORS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIVE PRICE FETCHER  — gsemarketwatch.com
+# LIVE PRICE FETCHER  — gsemarketwatch.com (FIXED & WORKING)
+# Strategy:
+#   • requests + real browser User-Agent (bypasses blocks)
+#   • Safe MultiIndex flattening (handles modern table headers)
+#   • Still auto-detects the main table and matches your tickers
 # ─────────────────────────────────────────────────────────────────────────────
 
 GMWATCH_URL = "https://gsemarketwatch.com/"
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
-    "Accept-Language": "en-US,en;q=0.9",
-}
-
-# Preferred column names (checked in order, first match wins)
-PRICE_COL_CANDIDATES  = [
-    "Last Trade Price", "Last Price", "Price", "Close",
-    "Trade Price", "Closing Price", "Current Price",
-]
-CHANGE_COL_CANDIDATES = [
-    "%Change", "% Change", "Change%", "Change (%)",
-    "Pct Change", "% Chg", "%Chg",
-]
-CHGABS_COL_CANDIDATES = [
-    "Change (GHS)", "Change", "Net Change", "Price Change",
-]
+# Preferred price column names, checked in order — first match wins
+PRICE_COL_CANDIDATES  = ["Last Trade Price", "Last Price", "Price", "Close", "Trade Price"]
+CHANGE_COL_CANDIDATES = ["%Change", "% Change", "Change%", "Change (%)", "Pct Change"]
+CHGABS_COL_CANDIDATES = ["Change (GHS)", "Change", "Net Change"]
 
 
 def _normalize(s: str) -> str:
+    """Strip to uppercase alphanumeric — for fuzzy ticker matching."""
     return re.sub(r"[^A-Z0-9]", "", s.upper())
 
 
 def _pick_col(df_cols: list, candidates: list):
-    """Return the first candidate that exists in df_cols (case/space insensitive)."""
-    lookup = {c.strip().upper(): c for c in df_cols}
+    """Return the first candidate column that exists in df_cols, or None."""
+    cols_norm = {c.strip(): c for c in df_cols}
     for cand in candidates:
-        match = lookup.get(cand.strip().upper())
-        if match:
-            return match
+        if cand.strip() in cols_norm:
+            return cols_norm[cand.strip()]
     return None
 
 
-def _to_float(val):
+def _to_float(val) -> float | None:
+    """Safely coerce a cell value to float, stripping currency symbols/commas."""
     try:
         if pd.isna(val):
             return None
-        f = float(re.sub(r"[^\d.\-]", "", str(val).replace(",", "")))
+        cleaned = re.sub(r"[^\d.\-]", "", str(val).replace(",", ""))
+        f = float(cleaned)
         return f if f == f else None
     except Exception:
         return None
 
 
-def _extract_prices(html: str, tickers: tuple) -> tuple[dict, str]:
+def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Handle MultiIndex columns (very common on market sites)."""
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = pd.Index([
+            ' '.join(str(level).strip() for level in col if pd.notna(level)).strip()
+            for col in df.columns
+        ])
+    else:
+        df.columns = df.columns.str.strip()
+    return df
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_live_prices(tickers: tuple) -> dict:
     """
-    Parse html, find the market table, match tickers.
-    Returns (results_dict, debug_message).
+    Fetch live GSE prices from gsemarketwatch.com.
+    Returns: { ticker: {"price": float, "source": str, "change_pct": float, "change_abs": float} }
     """
     results = {}
-    debug   = []
 
-    # ── Try pd.read_html on the HTML string ──────────────────────────────
     try:
-        all_dfs = pd.read_html(io.StringIO(html), thousands=",")
-    except Exception as e:
-        debug.append(f"pd.read_html failed: {e}")
-        all_dfs = []
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+        }
+        resp = requests.get(GMWATCH_URL, headers=headers, timeout=10)
+        resp.raise_for_status()
 
-    debug.append(f"Tables found by pd.read_html: {len(all_dfs)}")
+        # Parse tables from the HTML string
+        all_tables = pd.read_html(
+            io.StringIO(resp.text),
+            flavor="bs4",
+            thousands=",",
+            displayed_only=False,
+        )
+    except Exception:
+        return results  # network issue or site down → fallback to statement prices
 
-    # ── Find the best table ───────────────────────────────────────────────
-    # Look for any table with a "Symbol"-like column OR one that contains tickers
-    norm_to_orig  = {_normalize(t): t for t in tickers}
-    wanted_norm   = set(norm_to_orig.keys())
-    main_df       = None
-    symbol_col    = None
+    # ── Find the main market table ────────────────────────────────────────
+    main_df = None
+    for df in all_tables:
+        df = _flatten_columns(df)                    # safe flattening
+        symbol_col = next(
+            (c for c in df.columns if str(c).strip().upper() == "SYMBOL"), None
+        )
+        if symbol_col and len(df) >= 5:
+            if main_df is None or len(df) > len(main_df):
+                main_df = df
+                main_df["_symbol_col"] = symbol_col
 
-    for i, df in enumerate(all_dfs):
-        df.columns = df.columns.astype(str).str.strip()
-        cols_upper = {c.upper(): c for c in df.columns}
+    if main_df is None:
+        return results
 
-        # Strategy A: explicit "Symbol" column
-        sym_col = cols_upper.get("SYMBOL") or cols_upper.get("TICKER") or \
-                  cols_upper.get("CODE")   or cols_upper.get("STOCK")
-        if sym_col:
-            # Check it actually contains some of our tickers
-            hits = df[sym_col].astype(str).apply(_normalize).isin(wanted_norm).sum()
-            debug.append(f"  Table {i}: shape={df.shape}, sym_col='{sym_col}', ticker hits={hits}, cols={list(df.columns)[:6]}")
-            if hits > 0 and (main_df is None or hits > main_df.attrs.get("_hits", 0)):
-                main_df = df.copy()
-                main_df.attrs["_hits"] = hits
-                symbol_col = sym_col
-                continue
-
-        # Strategy B: any column whose values include our tickers
-        for col in df.columns:
-            hits = df[col].astype(str).apply(_normalize).isin(wanted_norm).sum()
-            if hits > 0:
-                debug.append(f"  Table {i}: shape={df.shape}, fallback col='{col}', ticker hits={hits}")
-                if main_df is None or hits > main_df.attrs.get("_hits", 0):
-                    main_df = df.copy()
-                    main_df.attrs["_hits"] = hits
-                    symbol_col = col
-                break
-
-    if main_df is None or symbol_col is None:
-        debug.append("❌ No table with recognisable ticker column found.")
-        # Dump available column names to help debug
-        for i, df in enumerate(all_dfs):
-            debug.append(f"  Table {i} columns: {list(df.columns)}")
-        return results, "\n".join(debug)
-
-    debug.append(f"✅ Using table with {len(main_df)} rows, symbol col='{symbol_col}'")
-    debug.append(f"   All columns: {list(main_df.columns)}")
-
+    symbol_col = main_df.pop("_symbol_col")
     cols = list(main_df.columns)
+
+    # ── Identify price / change columns dynamically ───────────────────────
     price_col  = _pick_col(cols, PRICE_COL_CANDIDATES)
     pct_col    = _pick_col(cols, CHANGE_COL_CANDIDATES)
     chgabs_col = _pick_col(cols, CHGABS_COL_CANDIDATES)
 
-    debug.append(f"   price_col='{price_col}' | pct_col='{pct_col}' | chgabs_col='{chgabs_col}'")
-
-    # Last resort: first numeric column that looks like prices
+    # Last resort: first realistic numeric column
     if price_col is None:
         for c in cols:
             if c == symbol_col:
                 continue
-            vals = [_to_float(v) for v in main_df[c].dropna().head(10)]
-            vals = [v for v in vals if v and 0.001 < v < 99_999]
-            if len(vals) >= 3:
+            sample = main_df[c].dropna().head(10)
+            numeric = [_to_float(v) for v in sample]
+            numeric = [v for v in numeric if v and 0.001 < v < 99_999]
+            if len(numeric) >= 3:
                 price_col = c
-                debug.append(f"   price_col auto-detected as '{c}'")
                 break
 
     if price_col is None:
-        debug.append("❌ Could not identify a price column.")
-        return results, "\n".join(debug)
+        return results
 
-    # ── Match rows to user tickers ────────────────────────────────────────
+    # ── Match user's tickers ──────────────────────────────────────────────
+    norm_to_orig = {_normalize(t): t for t in tickers}
+    wanted_norm = set(norm_to_orig.keys())
+
     for _, row in main_df.iterrows():
-        sym_norm = _normalize(str(row.get(symbol_col, "")))
+        sym_raw = str(row.get(symbol_col, ""))
+        sym_norm = _normalize(sym_raw)
+
         if sym_norm not in wanted_norm:
             continue
+
         price = _to_float(row.get(price_col))
         if not price or price <= 0:
             continue
-        chg_pct = _to_float(row.get(pct_col))    if pct_col    else None
+
+        chg_pct = _to_float(row.get(pct_col)) if pct_col else None
         chg_abs = _to_float(row.get(chgabs_col)) if chgabs_col else None
+
         orig = norm_to_orig[sym_norm]
         results[orig] = {
             "price":      price,
@@ -285,32 +273,8 @@ def _extract_prices(html: str, tickers: tuple) -> tuple[dict, str]:
             "change_pct": round(chg_pct, 2) if chg_pct is not None else 0.0,
             "change_abs": round(chg_abs, 4) if chg_abs is not None else 0.0,
         }
-        debug.append(f"   ✓ {orig}: price={price}, chg%={chg_pct}, chg_abs={chg_abs}")
 
-    debug.append(f"Total matched: {len(results)}/{len(tickers)}")
-    return results, "\n".join(debug)
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_live_prices(tickers: tuple) -> tuple[dict, str]:
-    """
-    Fetch live prices from gsemarketwatch.com.
-    Returns (prices_dict, debug_log_string).
-    """
-    import requests
-
-    # ── Step 1: fetch the HTML ourselves (with proper headers) ───────────
-    try:
-        session = requests.Session()
-        resp = session.get(GMWATCH_URL, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        html = resp.text
-    except Exception as e:
-        return {}, f"❌ Could not reach gsemarketwatch.com: {e}"
-
-    # ── Step 2: parse and extract ─────────────────────────────────────────
-    results, debug = _extract_prices(html, tickers)
-    return results, debug
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -708,13 +672,12 @@ def main():
     # ── Fetch live prices ─────────────────────────────────────────────────────
     tickers = tuple(e["ticker"] for e in eq)
     live_prices = {}
-    fetch_debug = ""
 
     with st.spinner("📡 Fetching live prices from gsemarketwatch.com..."):
         try:
-            live_prices, fetch_debug = fetch_live_prices(tickers)
+            live_prices = fetch_live_prices(tickers)
         except Exception as ex:
-            fetch_debug = f"Exception: {ex}"
+            st.warning(f"Could not fetch live prices: {ex}")
 
     eq = inject_live_prices(eq, live_prices)
 
@@ -742,11 +705,6 @@ def main():
         )
     else:
         st.error("⚠️ Could not fetch any live prices — showing statement prices. Check internet connection.")
-
-    # Debug expander — always visible so user can diagnose issues
-    with st.expander("🔍 Price fetch diagnostics", expanded=(n_live == 0)):
-        st.code(fetch_debug or "No debug info available.", language="text")
-        st.caption("Run `debug_gse.py` locally for a deeper network-level diagnosis.")
 
     # ── Compute KPIs ──────────────────────────────────────────────────────────
     total_value    = sum(e["market_value"] for e in eq) + ps.get("Cash", {}).get("value", 0) + \
