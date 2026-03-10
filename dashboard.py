@@ -391,8 +391,8 @@ def chart_allocation_treemap(ps):
         texttemplate="<b>%{label}</b><br>GHS %{value:,.0f}<br>%{percentRoot:.1%}",
         hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f}<extra></extra>",
     ))
-    fig.update_layout(title="Portfolio Allocation", **T, height=320,
-                      margin=dict(l=8, r=8, t=44, b=8))
+    layout = {**T, "title": "Portfolio Allocation", "height": 320, "margin": dict(l=8, r=8, t=44, b=8)}
+    fig.update_layout(**layout)
     return fig
 
 
