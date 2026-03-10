@@ -2,7 +2,7 @@
 IC Securities Portfolio Analyser — Streamlit Dashboard
 =======================================================
 Install:  pip install streamlit plotly pdfplumber pandas requests beautifulsoup4 lxml
-Run:      streamlit run streamlit_dashboard.py
+Run:      streamlit run akwasi.py
 """
 
 import io, re, warnings
@@ -734,7 +734,7 @@ def main():
         st.success(f"📡 All {n_live} live prices fetched · {src_detail} · *(refreshes every 5 min)*")
     elif n_live > 0:
         st.warning(f"📡 **{n_live}/{len(eq)} live prices** fetched · {src_detail}"
-                   + (f" · {n_stmt} using statement price" if n_stmt else ""))
+                    + (f" · {n_stmt} using statement price" if n_stmt else ""))
     else:
         st.error("⚠️ Live price fetch failed — showing statement prices.")
 
