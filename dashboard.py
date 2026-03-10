@@ -677,7 +677,7 @@ def main():
         _tdf["month"] = _tdf["date"].dt.to_period("M")
         active_month  = str(_tdf["month"].value_counts().idxmax())
 
-    # ── Client bar ────────────────────────────────────────────────────────────
+    # ── Client bar (always visible, above tabs) ──────────────────────────────
     st.markdown(f"""
     <div style="background:{CARD};border-radius:12px;padding:14px 20px;
                 display:flex;justify-content:space-between;align-items:center;
@@ -693,243 +693,244 @@ def main():
            {len(eq)} stocks · {len(txs)} transactions</span></div>
     </div>""", unsafe_allow_html=True)
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────
-    shdr("📊 Portfolio Overview")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1: st.markdown(kpi("Total Portfolio Value", f"GHS {total_value:,.2f}",
-                             f"As of {data['report_date']}", "b"), unsafe_allow_html=True)
-    with c2: st.markdown(kpi("Unrealised Gain / Loss",
-                             f"<span class='{pn(total_gain)}'>{'+'if total_gain>=0 else ''}"
-                             f"GHS {total_gain:,.2f}</span>",
-                             f"<span class='{pn(gain_pct)}'>{gain_pct:+.2f}%</span> on cost basis",
-                             "g" if total_gain >= 0 else "r"), unsafe_allow_html=True)
-    with c3: st.markdown(kpi("Total Cost Basis", f"GHS {total_cost:,.2f}",
-                             f"{len(eq)} positions"), unsafe_allow_html=True)
-    with c4: st.markdown(kpi("Overall ROI",
-                             f"<span class='{pn(overall_roi)}'>{overall_roi:+.2f}%</span>",
-                             f"Net invested GHS {net_invested:,.2f}",
-                             "g" if overall_roi >= 0 else "r"), unsafe_allow_html=True)
+    # ── Tabs ──────────────────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "📊 Overview",
+        "📈 Performance",
+        "⚖️ Risk & Scenarios",
+        "💸 Cash Flow",
+        "📋 Holdings",
+    ])
 
-    st.markdown("")
-    c5, c6, c7, c8 = st.columns(4)
-    with c5: st.markdown(kpi("Equities Value", f"GHS {equities_val:,.2f}",
-                             f"{ps.get('Equities',{}).get('alloc',0):.1f}% of portfolio"),
-                         unsafe_allow_html=True)
-    with c6: st.markdown(kpi("Cash Balance", f"GHS {cash_val:,.2f}",
-                             f"{ps.get('Cash',{}).get('alloc',0):.1f}% of portfolio", "y"),
-                         unsafe_allow_html=True)
-    with c7: st.markdown(kpi("Total Contributions", f"GHS {total_credits:,.2f}",
-                             f"{len(txs)} transactions"), unsafe_allow_html=True)
-    with c8: st.markdown(kpi("Total Withdrawals", f"GHS {total_debits:,.2f}",
-                             f"Net GHS {net_invested:,.2f}", "r"), unsafe_allow_html=True)
-    st.markdown("---")
+    # ── TAB 1: Overview ───────────────────────────────────────────────────────
+    with tab1:
+        shdr("📊 Portfolio Summary")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1: st.markdown(kpi("Total Portfolio Value", f"GHS {total_value:,.2f}",
+                                 f"As of {data['report_date']}", "b"), unsafe_allow_html=True)
+        with c2: st.markdown(kpi("Unrealised Gain / Loss",
+                                 f"<span class='{pn(total_gain)}'>{'+'if total_gain>=0 else ''}"
+                                 f"GHS {total_gain:,.2f}</span>",
+                                 f"<span class='{pn(gain_pct)}'>{gain_pct:+.2f}%</span> on cost basis",
+                                 "g" if total_gain >= 0 else "r"), unsafe_allow_html=True)
+        with c3: st.markdown(kpi("Total Cost Basis", f"GHS {total_cost:,.2f}",
+                                 f"{len(eq)} positions"), unsafe_allow_html=True)
+        with c4: st.markdown(kpi("Overall ROI",
+                                 f"<span class='{pn(overall_roi)}'>{overall_roi:+.2f}%</span>",
+                                 f"Net invested GHS {net_invested:,.2f}",
+                                 "g" if overall_roi >= 0 else "r"), unsafe_allow_html=True)
+        st.markdown("")
+        c5, c6, c7, c8 = st.columns(4)
+        with c5: st.markdown(kpi("Equities Value", f"GHS {equities_val:,.2f}",
+                                 f"{ps.get('Equities',{}).get('alloc',0):.1f}% of portfolio"),
+                             unsafe_allow_html=True)
+        with c6: st.markdown(kpi("Cash Balance", f"GHS {cash_val:,.2f}",
+                                 f"{ps.get('Cash',{}).get('alloc',0):.1f}% of portfolio", "y"),
+                             unsafe_allow_html=True)
+        with c7: st.markdown(kpi("Total Contributions", f"GHS {total_credits:,.2f}",
+                                 f"{len(txs)} transactions"), unsafe_allow_html=True)
+        with c8: st.markdown(kpi("Total Withdrawals", f"GHS {total_debits:,.2f}",
+                                 f"Net GHS {net_invested:,.2f}", "r"), unsafe_allow_html=True)
 
-    # ── Quick Insights ────────────────────────────────────────────────────────
-    shdr("💡 Quick Insights")
-    i1, i2, i3, i4, i5, i6 = st.columns(6)
-    with i1: st.markdown(insight("🏆","Best Performer",  f"{best['ticker']} ({best['gain_pct']:+.1f}%)", "pos"), unsafe_allow_html=True)
-    with i2: st.markdown(insight("📉","Worst Performer", f"{worst['ticker']} ({worst['gain_pct']:+.1f}%)", "neg"), unsafe_allow_html=True)
-    with i3: st.markdown(insight("💎","Largest Position",f"{biggest['ticker']} · GHS {biggest['market_value']:,.0f}"), unsafe_allow_html=True)
-    with i4: st.markdown(insight("⚡","Most Active Month", active_month), unsafe_allow_html=True)
-    with i5: st.markdown(insight("✅","Winning Positions", f"{winners} / {len(eq)}", "pos"), unsafe_allow_html=True)
-    with i6: st.markdown(insight("📡","Live Prices", f"{n_live} / {len(eq)}"), unsafe_allow_html=True)
-
-    # ── Today's Movers ────────────────────────────────────────────────────────
-    movers = sorted([e for e in eq if e.get("change_pct") is not None],
-                    key=lambda e: abs(e["change_pct"]), reverse=True)
-    if movers:
         st.markdown("---")
-        shdr("🚀 Today's Movers")
-        mcols = st.columns(min(len(movers), 5))
-        for col, e in zip(mcols, movers[:5]):
-            chg  = e["change_pct"] or 0
-            chga = e["change_abs"] or 0
-            cls  = "pos" if chg >= 0 else "neg"
-            col.markdown(
-                f"<div class='ibox'>"
-                f"<div class='ibox-lbl'>{e['ticker']}</div>"
-                f"<div class='ibox-val' style='font-size:1.3rem;'>GHS {e['live_price']:.2f}</div>"
-                f"<div class='ibox-val {cls}' style='font-size:.9rem;'>"
-                f"{'▲' if chg>=0 else '▼'} {abs(chg):.2f}% ({chga:+.4f})</div>"
-                f"</div>", unsafe_allow_html=True)
+        shdr("💡 Quick Insights")
+        i1, i2, i3, i4, i5, i6 = st.columns(6)
+        with i1: st.markdown(insight("🏆","Best Performer",  f"{best['ticker']} ({best['gain_pct']:+.1f}%)", "pos"), unsafe_allow_html=True)
+        with i2: st.markdown(insight("📉","Worst Performer", f"{worst['ticker']} ({worst['gain_pct']:+.1f}%)", "neg"), unsafe_allow_html=True)
+        with i3: st.markdown(insight("💎","Largest Position",f"{biggest['ticker']} · GHS {biggest['market_value']:,.0f}"), unsafe_allow_html=True)
+        with i4: st.markdown(insight("⚡","Most Active Month", active_month), unsafe_allow_html=True)
+        with i5: st.markdown(insight("✅","Winning Positions", f"{winners} / {len(eq)}", "pos"), unsafe_allow_html=True)
+        with i6: st.markdown(insight("📡","Live Prices", f"{n_live} / {len(eq)}"), unsafe_allow_html=True)
 
-    st.markdown("---")
+        movers = sorted([e for e in eq if e.get("change_pct") is not None],
+                        key=lambda e: abs(e["change_pct"]), reverse=True)
+        if movers:
+            st.markdown("---")
+            shdr("🚀 Today's Movers")
+            mcols = st.columns(min(len(movers), 5))
+            for col, e in zip(mcols, movers[:5]):
+                chg  = e["change_pct"] or 0
+                chga = e["change_abs"] or 0
+                cls  = "pos" if chg >= 0 else "neg"
+                col.markdown(
+                    f"<div class='ibox'>"
+                    f"<div class='ibox-lbl'>{e['ticker']}</div>"
+                    f"<div class='ibox-val' style='font-size:1.3rem;'>GHS {e['live_price']:.2f}</div>"
+                    f"<div class='ibox-val {cls}' style='font-size:.9rem;'>"
+                    f"{'▲' if chg>=0 else '▼'} {abs(chg):.2f}% ({chga:+.4f})</div>"
+                    f"</div>", unsafe_allow_html=True)
 
-    # ── Performance Charts ────────────────────────────────────────────────────
-    shdr("📈 Performance Analysis")
-    cl, cr = st.columns([3, 2])
-    with cl: st.plotly_chart(chart_gain_loss(eq), use_container_width=True)
-    with cr: st.plotly_chart(chart_stock_weight_bar(eq), use_container_width=True)
+    # ── TAB 2: Performance ────────────────────────────────────────────────────
+    with tab2:
+        shdr("📈 Performance Analysis")
+        cl, cr = st.columns([3, 2])
+        with cl: st.plotly_chart(chart_gain_loss(eq), use_container_width=True)
+        with cr: st.plotly_chart(chart_stock_weight_bar(eq), use_container_width=True)
 
-    cl, cr = st.columns([3, 2])
-    with cl: st.plotly_chart(chart_market_vs_cost(eq), use_container_width=True)
-    with cr: st.plotly_chart(chart_allocation_treemap(ps), use_container_width=True)
+        cl, cr = st.columns([3, 2])
+        with cl: st.plotly_chart(chart_market_vs_cost(eq), use_container_width=True)
+        with cr: st.plotly_chart(chart_allocation_treemap(ps), use_container_width=True)
 
-    st.plotly_chart(chart_pl_waterfall(eq), use_container_width=True)
+        st.plotly_chart(chart_pl_waterfall(eq), use_container_width=True)
 
-    pc = chart_price_comparison(eq)
-    if pc:
-        st.plotly_chart(pc, use_container_width=True)
+        pc = chart_price_comparison(eq)
+        if pc:
+            st.plotly_chart(pc, use_container_width=True)
 
-    st.markdown("---")
+    # ── TAB 3: Risk & Scenarios ───────────────────────────────────────────────
+    with tab3:
+        be = chart_breakeven(eq)
+        if be:
+            shdr("🎯 Break-even Analysis")
+            st.plotly_chart(be, use_container_width=True)
+            st.markdown("---")
 
-    # ── Break-even ────────────────────────────────────────────────────────────
-    be = chart_breakeven(eq)
-    if be:
-        shdr("🎯 Break-even Analysis")
-        st.plotly_chart(be, use_container_width=True)
+        shdr("⚖️ Concentration Risk")
+        conc_fig, hhi, risk, risk_color = chart_concentration(eq)
+        st.plotly_chart(conc_fig, use_container_width=True)
+        st.markdown(
+            f"<div style='text-align:center;color:{MUTED};font-size:.85rem;margin-top:-10px;'>"
+            f"HHI: <b style='color:{risk_color}'>{hhi}</b> · "
+            f"Concentration: <b style='color:{risk_color}'>{risk}</b> · "
+            f"(Low &lt;1500 · Moderate 1500–2500 · High &gt;2500)"
+            f"</div>", unsafe_allow_html=True)
+
         st.markdown("---")
+        shdr("🔮 What-If Scenario Simulator")
+        st.caption("Adjust sliders to model price changes and see the impact on your portfolio.")
 
-    # ── Concentration Risk ────────────────────────────────────────────────────
-    shdr("⚖️ Concentration Risk")
-    conc_fig, hhi, risk, risk_color = chart_concentration(eq)
-    st.plotly_chart(conc_fig, use_container_width=True)
-    st.markdown(
-        f"<div style='text-align:center;color:{MUTED};font-size:.85rem;margin-top:-10px;'>"
-        f"HHI: <b style='color:{risk_color}'>{hhi}</b> · "
-        f"Concentration: <b style='color:{risk_color}'>{risk}</b> · "
-        f"(Low &lt;1500 · Moderate 1500–2500 · High &gt;2500)"
-        f"</div>", unsafe_allow_html=True)
-    st.markdown("---")
+        rows_of_5 = [eq[i:i+5] for i in range(0, len(eq), 5)]
+        sim_mult  = {}
+        for row in rows_of_5:
+            cols = st.columns(len(row))
+            for col, e in zip(cols, row):
+                chg = col.slider(e["ticker"], min_value=-50, max_value=100, value=0,
+                                 step=1, format="%d%%", key=f"sim_{e['ticker']}")
+                sim_mult[e["ticker"]] = 1 + chg / 100
 
-    # ── What-If Simulator ─────────────────────────────────────────────────────
-    shdr("🔮 What-If Scenario Simulator")
-    st.caption("Adjust sliders to model price changes and see the impact on your portfolio.")
+        sim_mv    = sum(e["market_value"] * sim_mult.get(e["ticker"], 1) for e in eq)
+        sim_total = sim_mv + cash_val + funds_val
+        sim_gain  = sum((e["market_value"] * sim_mult.get(e["ticker"],1)) - e["total_cost"] for e in eq)
+        sim_delta = sim_total - total_value
+        sim_roi   = ((sim_total - net_invested) / net_invested * 100) if net_invested else 0
 
-    rows_of_5 = [eq[i:i+5] for i in range(0, len(eq), 5)]
-    sim_mult  = {}
-    for row in rows_of_5:
-        cols = st.columns(len(row))
-        for col, e in zip(cols, row):
-            chg = col.slider(e["ticker"], min_value=-50, max_value=100, value=0,
-                             step=1, format="%d%%", key=f"sim_{e['ticker']}")
-            sim_mult[e["ticker"]] = 1 + chg / 100
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1: st.markdown(kpi("Simulated Portfolio Value", f"GHS {sim_total:,.2f}",
+                                  f"{'+'if sim_delta>=0 else ''}GHS {sim_delta:,.2f} vs current",
+                                  "g" if sim_delta >= 0 else "r"), unsafe_allow_html=True)
+        with sc2: st.markdown(kpi("Simulated Equity G/L",
+                                  f"<span class='{pn(sim_gain)}'>{'+'if sim_gain>=0 else ''}"
+                                  f"GHS {sim_gain:,.2f}</span>",
+                                  f"{(sim_gain/total_cost*100):+.2f}% on cost",
+                                  "g" if sim_gain >= 0 else "r"), unsafe_allow_html=True)
+        with sc3: st.markdown(kpi("Simulated ROI",
+                                  f"<span class='{pn(sim_roi)}'>{sim_roi:+.2f}%</span>",
+                                  f"vs current {overall_roi:+.2f}%",
+                                  "g" if sim_roi >= 0 else "r"), unsafe_allow_html=True)
 
-    sim_mv    = sum(e["market_value"] * sim_mult.get(e["ticker"], 1) for e in eq)
-    sim_total = sim_mv + cash_val + funds_val
-    sim_gain  = sum((e["market_value"] * sim_mult.get(e["ticker"],1)) - e["total_cost"] for e in eq)
-    sim_delta = sim_total - total_value
-    sim_roi   = ((sim_total - net_invested) / net_invested * 100) if net_invested else 0
+        sim_df = pd.DataFrame([{
+            "ticker":    e["ticker"],
+            "current":   e["market_value"],
+            "simulated": e["market_value"] * sim_mult.get(e["ticker"], 1),
+        } for e in eq]).sort_values("simulated", ascending=False)
+        fig_sim = go.Figure()
+        fig_sim.add_trace(go.Bar(name="Current",   x=sim_df["ticker"], y=sim_df["current"],
+                                 marker_color=PURPLE, opacity=0.7))
+        fig_sim.add_trace(go.Bar(name="Simulated", x=sim_df["ticker"], y=sim_df["simulated"],
+                                 marker_color=GREEN, opacity=0.85))
+        fig_sim.update_layout(title="Current vs Simulated Market Value", yaxis_title="GHS",
+                              barmode="group", legend=dict(bgcolor=CARD), **T, height=320)
+        st.plotly_chart(fig_sim, use_container_width=True)
 
-    sc1, sc2, sc3 = st.columns(3)
-    with sc1: st.markdown(kpi("Simulated Portfolio Value", f"GHS {sim_total:,.2f}",
-                              f"{'+'if sim_delta>=0 else ''}GHS {sim_delta:,.2f} vs current",
-                              "g" if sim_delta >= 0 else "r"), unsafe_allow_html=True)
-    with sc2: st.markdown(kpi("Simulated Equity G/L",
-                              f"<span class='{pn(sim_gain)}'>{'+'if sim_gain>=0 else ''}"
-                              f"GHS {sim_gain:,.2f}</span>",
-                              f"{(sim_gain/total_cost*100):+.2f}% on cost",
-                              "g" if sim_gain >= 0 else "r"), unsafe_allow_html=True)
-    with sc3: st.markdown(kpi("Simulated ROI",
-                              f"<span class='{pn(sim_roi)}'>{sim_roi:+.2f}%</span>",
-                              f"vs current {overall_roi:+.2f}%",
-                              "g" if sim_roi >= 0 else "r"), unsafe_allow_html=True)
+    # ── TAB 4: Cash Flow ──────────────────────────────────────────────────────
+    with tab4:
+        shdr("💸 Cash Flow & History")
+        cf = chart_cashflow(txs)
+        if cf:
+            st.plotly_chart(cf, use_container_width=True)
 
-    sim_df = pd.DataFrame([{
-        "ticker":    e["ticker"],
-        "current":   e["market_value"],
-        "simulated": e["market_value"] * sim_mult.get(e["ticker"], 1),
-    } for e in eq]).sort_values("simulated", ascending=False)
-    fig_sim = go.Figure()
-    fig_sim.add_trace(go.Bar(name="Current",   x=sim_df["ticker"], y=sim_df["current"],
-                             marker_color=PURPLE, opacity=0.7))
-    fig_sim.add_trace(go.Bar(name="Simulated", x=sim_df["ticker"], y=sim_df["simulated"],
-                             marker_color=GREEN, opacity=0.85))
-    fig_sim.update_layout(title="Current vs Simulated Market Value", yaxis_title="GHS",
-                          barmode="group", legend=dict(bgcolor=CARD), **T, height=320)
-    st.plotly_chart(fig_sim, use_container_width=True)
-    st.markdown("---")
+        cl, cr = st.columns([3, 2])
+        with cl:
+            cumul = chart_cumulative(txs, total_value)
+            if cumul:
+                st.plotly_chart(cumul, use_container_width=True)
+        with cr:
+            tx_df2 = pd.DataFrame(txs)
+            if not tx_df2.empty:
+                tx_df2["amount"] = tx_df2["credit"] + tx_df2["debit"]
+                grp = tx_df2.groupby("type")["amount"].sum().reset_index()
+                cmap = {"Buy":BLUE,"Sell":AMBER,"Credit":GREEN,"Withdrawal":RED,"Other":MUTED}
+                fig_tt = go.Figure(go.Bar(
+                    x=grp["type"], y=grp["amount"],
+                    marker_color=[cmap.get(t, MUTED) for t in grp["type"]],
+                    text=[f"GHS {v:,.0f}" for v in grp["amount"]], textposition="outside",
+                    hovertemplate="%{x}: GHS %{y:,.2f}<extra></extra>",
+                ))
+                fig_tt.update_layout(title="Volume by Transaction Type",
+                                     yaxis_title="GHS", **T, height=320)
+                st.plotly_chart(fig_tt, use_container_width=True)
 
-    # ── Cash Flow ─────────────────────────────────────────────────────────────
-    shdr("💸 Cash Flow & History")
-    cf = chart_cashflow(txs)
-    if cf:
-        st.plotly_chart(cf, use_container_width=True)
+    # ── TAB 5: Holdings ───────────────────────────────────────────────────────
+    with tab5:
+        shdr("📋 Equity Positions")
+        pos_rows = []
+        for e in sorted(eq, key=lambda x: x["market_value"], reverse=True):
+            pos_rows.append({
+                "Ticker":       e["ticker"],
+                "Qty":          f"{e['qty']:,.0f}",
+                "Avg Cost":     f"{e['avg_cost']:.4f}",
+                "Stmt Price":   f"{e['statement_price']:.4f}",
+                "Live Price":   f"{e['live_price']:.4f}" if e["live_price"] else "—",
+                "Today Δ%":     f"{e['change_pct']:+.2f}%" if e.get("change_pct") is not None else "—",
+                "Today ΔGHS":   f"{e['change_abs']:+.4f}" if e.get("change_abs") is not None else "—",
+                "Cost Basis":   f"GHS {e['total_cost']:,.2f}",
+                "Market Value": f"GHS {e['market_value']:,.2f}",
+                "Gain/Loss":    f"{'+'if e['gain_loss']>=0 else ''}GHS {e['gain_loss']:,.2f}",
+                "Return %":     f"{e['gain_pct']:+.1f}%",
+                "Break-even":   "✅ In profit" if e["gain_pct"] >= 0 else f"Need GHS {e['avg_cost']:.4f}",
+            })
 
-    cl, cr = st.columns([3, 2])
-    with cl:
-        cumul = chart_cumulative(txs, total_value)
-        if cumul:
-            st.plotly_chart(cumul, use_container_width=True)
-    with cr:
-        tx_df2 = pd.DataFrame(txs)
-        if not tx_df2.empty:
-            tx_df2["amount"] = tx_df2["credit"] + tx_df2["debit"]
-            grp = tx_df2.groupby("type")["amount"].sum().reset_index()
-            cmap = {"Buy":BLUE,"Sell":AMBER,"Credit":GREEN,"Withdrawal":RED,"Other":MUTED}
-            fig_tt = go.Figure(go.Bar(
-                x=grp["type"], y=grp["amount"],
-                marker_color=[cmap.get(t, MUTED) for t in grp["type"]],
-                text=[f"GHS {v:,.0f}" for v in grp["amount"]], textposition="outside",
-                hovertemplate="%{x}: GHS %{y:,.2f}<extra></extra>",
-            ))
-            fig_tt.update_layout(title="Volume by Transaction Type",
-                                 yaxis_title="GHS", **T, height=320)
-            st.plotly_chart(fig_tt, use_container_width=True)
+        df_pos = pd.DataFrame(pos_rows)
 
-    st.markdown("---")
+        def _style(row):
+            s = [""] * len(row)
+            ig = list(row.index).index("Gain/Loss")
+            ir = list(row.index).index("Return %")
+            c  = f"color:{GREEN};font-weight:700" if "+" in row["Gain/Loss"] else f"color:{RED};font-weight:700"
+            s[ig] = s[ir] = c
+            return s
 
-    # ── Equity Positions Table ────────────────────────────────────────────────
-    shdr("📋 Equity Positions")
-    pos_rows = []
-    for e in sorted(eq, key=lambda x: x["market_value"], reverse=True):
-        pos_rows.append({
-            "Ticker":       e["ticker"],
-            "Qty":          f"{e['qty']:,.0f}",
-            "Avg Cost":     f"{e['avg_cost']:.4f}",
-            "Stmt Price":   f"{e['statement_price']:.4f}",
-            "Live Price":   f"{e['live_price']:.4f}" if e["live_price"] else "—",
-            "Today Δ%":     f"{e['change_pct']:+.2f}%" if e.get("change_pct") is not None else "—",
-            "Today ΔGHS":   f"{e['change_abs']:+.4f}" if e.get("change_abs") is not None else "—",
-            "Cost Basis":   f"GHS {e['total_cost']:,.2f}",
-            "Market Value": f"GHS {e['market_value']:,.2f}",
-            "Gain/Loss":    f"{'+'if e['gain_loss']>=0 else ''}GHS {e['gain_loss']:,.2f}",
-            "Return %":     f"{e['gain_pct']:+.1f}%",
-            "Break-even":   "✅ In profit" if e["gain_pct"] >= 0 else f"Need GHS {e['avg_cost']:.4f}",
-        })
+        st.dataframe(df_pos.style.apply(_style, axis=1),
+                     use_container_width=True, hide_index=True)
 
-    df_pos = pd.DataFrame(pos_rows)
+        st.markdown("---")
+        shdr("🕒 Transaction History")
+        tx_df = pd.DataFrame(txs).sort_values("date", ascending=False)
+        emoji = {"Buy":"🔵","Sell":"🟡","Credit":"🟢","Withdrawal":"🔴","Other":"⚪"}
+        tx_df["Type"] = tx_df["type"].map(lambda t: f"{emoji.get(t,'⚪')} {t}")
 
-    def _style(row):
-        s = [""] * len(row)
-        ig = list(row.index).index("Gain/Loss")
-        ir = list(row.index).index("Return %")
-        c  = f"color:{GREEN};font-weight:700" if "+" in row["Gain/Loss"] else f"color:{RED};font-weight:700"
-        s[ig] = s[ir] = c
-        return s
+        cf1, cf2 = st.columns([2, 3])
+        with cf1:
+            filt = st.multiselect("Filter", options=list(tx_df["Type"].unique()),
+                                   default=list(tx_df["Type"].unique()),
+                                   label_visibility="collapsed")
+        with cf2:
+            srch = st.text_input("Search", placeholder="Search description...",
+                                 label_visibility="collapsed")
 
-    st.dataframe(df_pos.style.apply(_style, axis=1),
-                 use_container_width=True, hide_index=True)
-    st.markdown("---")
+        view = tx_df[tx_df["Type"].isin(filt)]
+        if srch:
+            view = view[view["description"].str.contains(srch, case=False, na=False)]
 
-    # ── Transaction History ───────────────────────────────────────────────────
-    shdr("🕒 Transaction History")
-    tx_df = pd.DataFrame(txs).sort_values("date", ascending=False)
-    emoji = {"Buy":"🔵","Sell":"🟡","Credit":"🟢","Withdrawal":"🔴","Other":"⚪"}
-    tx_df["Type"] = tx_df["type"].map(lambda t: f"{emoji.get(t,'⚪')} {t}")
+        view_show = view[["date_str","Type","description","credit","debit"]].rename(columns={
+            "date_str":"Date","description":"Description",
+            "credit":"Credit (GHS)","debit":"Debit (GHS)"})
+        view_show["Credit (GHS)"] = view_show["Credit (GHS)"].apply(lambda v: f"+{v:,.2f}" if v>0 else "—")
+        view_show["Debit (GHS)"]  = view_show["Debit (GHS)"].apply( lambda v: f"-{v:,.2f}" if v>0 else "—")
+        view_show["Description"]  = view_show["Description"].str[:100]
+        st.dataframe(view_show, use_container_width=True, hide_index=True, height=400)
 
-    cf1, cf2 = st.columns([2, 3])
-    with cf1:
-        filt = st.multiselect("Filter", options=list(tx_df["Type"].unique()),
-                               default=list(tx_df["Type"].unique()),
-                               label_visibility="collapsed")
-    with cf2:
-        srch = st.text_input("Search", placeholder="Search description...",
-                             label_visibility="collapsed")
-
-    view = tx_df[tx_df["Type"].isin(filt)]
-    if srch:
-        view = view[view["description"].str.contains(srch, case=False, na=False)]
-
-    view_show = view[["date_str","Type","description","credit","debit"]].rename(columns={
-        "date_str":"Date","description":"Description",
-        "credit":"Credit (GHS)","debit":"Debit (GHS)"})
-    view_show["Credit (GHS)"] = view_show["Credit (GHS)"].apply(lambda v: f"+{v:,.2f}" if v>0 else "—")
-    view_show["Debit (GHS)"]  = view_show["Debit (GHS)"].apply( lambda v: f"-{v:,.2f}" if v>0 else "—")
-    view_show["Description"]  = view_show["Description"].str[:100]
-    st.dataframe(view_show, use_container_width=True, hide_index=True, height=400)
-
-    # Footer
+    # Footer (outside tabs)
     st.markdown(f"""
     <div style="text-align:center;color:{MUTED};font-size:.8rem;padding:24px 0 8px;">
       IC Portfolio Analyser · Prices via afx.kwayisi.org ·
