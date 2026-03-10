@@ -165,10 +165,8 @@ def _to_float(val) -> float | None:
 
 def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
     """
-    Parse afx.kwayisi.org/gse/ HTML directly with BeautifulSoup.
-
-    Table structure:
-        Ticker | Name | Volume | Price | Change
+    Robust parser for afx.kwayisi.org/gse page
+    Detects the stock table via headers instead of relying on page layout
     """
 
     from bs4 import BeautifulSoup
@@ -181,44 +179,35 @@ def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # find container
-    container = soup.find("div", class_="t")
+    table = None
 
-    if not container:
-        debug.append("❌ Could not find div.t container")
-        return {}, "\n".join(debug)
+    # Detect correct table by header names
+    for tbl in soup.find_all("table"):
+        headers = [th.get_text(strip=True) for th in tbl.find_all("th")]
+        if "Ticker" in headers and "Price" in headers:
+            table = tbl
+            debug.append("✓ Stock table found via header detection")
+            break
 
-    table = container.find("table")
-
-    if not table:
-        debug.append("❌ Could not find stock table")
+    if table is None:
+        debug.append("❌ Could not locate stock table")
         return {}, "\n".join(debug)
 
     headers = [th.get_text(strip=True) for th in table.find_all("th")]
-    debug.append(f"Headers found: {headers}")
 
     try:
         ticker_idx = headers.index("Ticker")
         price_idx = headers.index("Price")
         change_idx = headers.index("Change") if "Change" in headers else None
     except ValueError as e:
-        debug.append(f"❌ Expected column missing: {e}")
+        debug.append(f"❌ Missing expected column: {e}")
         return {}, "\n".join(debug)
 
-    tbody = table.find("tbody")
-
-    if not tbody:
-        debug.append("⚠ No tbody found")
-        return {}, "\n".join(debug)
+    rows = table.find_all("tr")
 
     matched = 0
 
-    for tr in tbody.find_all("tr"):
-
-        # Skip suspended stocks
-        if "ss" in (tr.get("class") or []):
-            continue
-
+    for tr in rows:
         cells = tr.find_all("td")
 
         if len(cells) <= price_idx:
@@ -237,7 +226,7 @@ def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
         price_raw = cells[price_idx].get_text(strip=True)
         price = _to_float(price_raw)
 
-        if not price or price <= 0:
+        if not price:
             continue
 
         change_abs = 0.0
@@ -248,29 +237,22 @@ def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
         prev = price - change_abs
         change_pct = (change_abs / prev * 100) if prev else 0.0
 
-        price = round(price, 4)
-        change_abs = round(change_abs, 4)
-        change_pct = round(change_pct, 2)
-
         orig = norm_to_orig[sym_norm]
 
         results[orig] = {
-            "price": price,
+            "price": round(price, 4),
             "source": "afx.kwayisi.org ✓",
-            "change_pct": change_pct,
-            "change_abs": change_abs,
+            "change_pct": round(change_pct, 2),
+            "change_abs": round(change_abs, 4),
         }
 
-        debug.append(f"✓ {orig}: {price} (Δ {change_abs:+.4f}, {change_pct:+.2f}%)")
+        debug.append(
+            f"✓ {orig}: {price} (Δ {change_abs:+.4f}, {change_pct:+.2f}%)"
+        )
 
         matched += 1
 
-    still_missing = [t for t in tickers if t not in results]
-
-    if still_missing:
-        debug.append(f"⚠ Missing prices for: {still_missing}")
-
-    debug.append(f"Matched {matched}/{len(tickers)} requested tickers")
+    debug.append(f"Matched {matched}/{len(tickers)} tickers")
 
     return results, "\n".join(debug)
 
