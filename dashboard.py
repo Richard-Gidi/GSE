@@ -16,36 +16,18 @@ import streamlit as st
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# THEME  —  dark / light palettes
+# THEME
 # ─────────────────────────────────────────────────────────────────────────────
-DARK = dict(
-    BG="#0f1117", CARD="#1a1d2e", BORDER="#232640",
-    TEXT="#e8eaf6", MUTED="#8892b0",
-)
-LIGHT = dict(
-    BG="#f4f6fb", CARD="#ffffff", BORDER="#dde1f0",
-    TEXT="#1a1d2e", MUTED="#6b7280",
-)
-
-# Accent colours are the same in both themes
+BG     = "#0f1117"
+CARD   = "#1a1d2e"
+BORDER = "#232640"
 PURPLE = "#6c63ff"
 GREEN  = "#00d68f"
 RED    = "#ff3d71"
 AMBER  = "#ffaa00"
 BLUE   = "#0095ff"
-
-st.set_page_config(page_title="IC Portfolio Analyser", page_icon="📈",
-                   layout="wide", initial_sidebar_state="collapsed")
-
-# Resolve theme from session state (default: dark)
-if "theme" not in st.session_state:
-    st.session_state["theme"] = "dark"
-_p  = DARK if st.session_state["theme"] == "dark" else LIGHT
-BG     = _p["BG"]
-CARD   = _p["CARD"]
-BORDER = _p["BORDER"]
-TEXT   = _p["TEXT"]
-MUTED  = _p["MUTED"]
+MUTED  = "#8892b0"
+TEXT   = "#e8eaf6"
 
 T = dict(
     paper_bgcolor=BG, plot_bgcolor=CARD,
@@ -55,22 +37,16 @@ T = dict(
     margin=dict(l=16, r=16, t=44, b=16),
 )
 
+st.set_page_config(page_title="IC Portfolio Analyser", page_icon="📈",
+                   layout="wide", initial_sidebar_state="collapsed")
+
 st.markdown(f"""<style>
 html, body, [class*="css"] {{ font-family: 'Segoe UI', system-ui, sans-serif; }}
-.stApp {{ background:{BG} !important; }}
-section[data-testid="stSidebar"] {{ background:{CARD} !important; }}
+.stApp {{ background:{BG}; }}
 hr {{ border-color:{BORDER} !important; margin:20px 0 !important; }}
 
-/* override Streamlit's own background tokens */
-[data-testid="stAppViewContainer"] {{ background:{BG} !important; }}
-[data-testid="stHeader"] {{ background:{BG} !important; }}
-[data-testid="stToolbar"] {{ background:{BG} !important; }}
-.block-container {{ color:{TEXT}; }}
-
 .kpi {{ background:{CARD}; border-radius:14px; padding:18px 20px;
-        border-left:4px solid {PURPLE}; margin-bottom:4px;
-        transition:transform .15s;
-        box-shadow: 0 1px 4px rgba(0,0,0,.08); }}
+        border-left:4px solid {PURPLE}; margin-bottom:4px; transition:transform .15s; }}
 .kpi:hover {{ transform:translateY(-2px); }}
 .kpi.g {{ border-left-color:{GREEN}; }}
 .kpi.r {{ border-left-color:{RED}; }}
@@ -82,8 +58,7 @@ hr {{ border-color:{BORDER} !important; margin:20px 0 !important; }}
 .kpi-sub {{ font-size:.75rem; color:{MUTED}; margin-top:4px; }}
 
 .ibox {{ background:{CARD}; border:1px solid {BORDER}; border-radius:12px;
-         padding:14px 16px; text-align:center; height:100%;
-         box-shadow:0 1px 4px rgba(0,0,0,.06); }}
+         padding:14px 16px; text-align:center; height:100%; }}
 .ibox-icon {{ font-size:1.6rem; }}
 .ibox-lbl  {{ font-size:.7rem; color:{MUTED}; text-transform:uppercase;
               letter-spacing:.05em; margin:6px 0 2px; }}
@@ -592,19 +567,6 @@ def chart_concentration(eq):
 # ─────────────────────────────────────────────────────────────────────────────
 def render_sidebar():
     with st.sidebar:
-        # ── Theme toggle ──────────────────────────────────────────────────────
-        is_dark = st.session_state.get("theme", "dark") == "dark"
-        col_icon, col_btn = st.columns([1, 3])
-        with col_icon:
-            st.markdown(f"<div style='font-size:1.6rem;padding-top:6px'>{'🌙' if is_dark else '☀️'}</div>",
-                        unsafe_allow_html=True)
-        with col_btn:
-            label = "Switch to Light" if is_dark else "Switch to Dark"
-            if st.button(label, use_container_width=True):
-                st.session_state["theme"] = "light" if is_dark else "dark"
-                st.rerun()
-        st.divider()
-
         st.markdown("### 📡 GSE Prices")
         if st.secrets.get("gse_html_b64", ""):
             st.success("✅ Loaded from Streamlit Secrets")
@@ -631,20 +593,13 @@ def main():
     render_sidebar()
 
     # Header
-    cl, ct, ctheme = st.columns([1, 7, 2])
+    cl, ct = st.columns([1, 9])
     with cl:
         st.markdown("<div style='font-size:3rem;padding-top:6px'>📈</div>", unsafe_allow_html=True)
     with ct:
         st.markdown("<div class='hero'>IC Portfolio Analyser</div>"
                     "<div class='hero-sub'>Upload your IC Securities statement · "
                     "Live GSE prices · Instant insights</div>", unsafe_allow_html=True)
-    with ctheme:
-        is_dark = st.session_state.get("theme", "dark") == "dark"
-        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-        if st.button("🌙 Dark" if not is_dark else "☀️ Light",
-                     use_container_width=True, key="header_theme_btn"):
-            st.session_state["theme"] = "light" if is_dark else "dark"
-            st.rerun()
     st.markdown("---")
 
     # Upload
