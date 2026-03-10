@@ -165,135 +165,93 @@ def _to_float(val) -> float | None:
 
 def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
     """
-    Robust parser for afx.kwayisi.org/gse page
-    Detects the stock table via headers instead of relying on page layout
-    """
+    Parse afx.kwayisi.org/gse/ HTML directly with BeautifulSoup.
 
+    The page has ONE main stock table (inside <div class="t">) with columns:
+        Ticker | Name | Volume | Price | Change
+
+    Each Ticker cell is:  <td><a href="...gse/mtngh.html">MTNGH</a></td>
+    Price / Change cells: plain text <td>6.36</td>  or  <td class="hi">+0.42</td>
+    """
     from bs4 import BeautifulSoup
 
     norm_to_orig = {_normalize(t): t for t in tickers}
-    wanted_norm = set(norm_to_orig.keys())
-
-    results = {}
-    debug = []
+    wanted_norm  = set(norm_to_orig.keys())
+    results, debug = {}, []
 
     soup = BeautifulSoup(html, "html.parser")
 
-    table = None
+    # The main table sits inside <div class="t">
+    container = soup.find("div", class_="t")
+    table = container.find("table") if container else None
 
-    # Detect correct table by header names
-    for tbl in soup.find_all("table"):
-        headers = [th.get_text(strip=True) for th in tbl.find_all("th")]
-        if "Ticker" in headers and "Price" in headers:
-            table = tbl
-            debug.append("✓ Stock table found via header detection")
-            break
+    # Fallback: find any table whose header contains "Ticker"
+    if table is None:
+        for tbl in soup.find_all("table"):
+            headers = [th.get_text(strip=True) for th in tbl.find_all("th")]
+            if "Ticker" in headers:
+                table = tbl
+                debug.append("Found table via header fallback")
+                break
 
     if table is None:
-        debug.append("❌ Could not locate stock table")
+        debug.append("❌ Could not find stock table in HTML")
+        # Show what tables exist
+        for i, tbl in enumerate(soup.find_all("table")):
+            hdrs = [th.get_text(strip=True) for th in tbl.find_all("th")][:6]
+            debug.append(f"  Table {i} headers: {hdrs}")
         return {}, "\n".join(debug)
 
+    # Identify column positions from <thead>
     headers = [th.get_text(strip=True) for th in table.find_all("th")]
+    debug.append(f"Table headers: {headers}")
 
     try:
         ticker_idx = headers.index("Ticker")
-        price_idx = headers.index("Price")
+        price_idx  = headers.index("Price")
         change_idx = headers.index("Change") if "Change" in headers else None
     except ValueError as e:
         debug.append(f"❌ Missing expected column: {e}")
         return {}, "\n".join(debug)
 
-    rows = table.find_all("tr")
-
     matched = 0
-
-    for tr in rows:
+    for tr in table.find("tbody").find_all("tr"):
         cells = tr.find_all("td")
-
         if len(cells) <= price_idx:
             continue
 
         ticker_raw = cells[ticker_idx].get_text(strip=True)
-
-        if not ticker_raw:
-            continue
-
-        sym_norm = _normalize(ticker_raw)
-
+        sym_norm   = _normalize(ticker_raw)
         if sym_norm not in wanted_norm:
             continue
 
         price_raw = cells[price_idx].get_text(strip=True)
-        price = _to_float(price_raw)
-
-        if not price:
+        price     = _to_float(price_raw)
+        if not price or price <= 0:
             continue
 
-        change_abs = 0.0
-
+        chg_abs = 0.0
         if change_idx is not None and len(cells) > change_idx:
-            change_abs = _to_float(cells[change_idx].get_text(strip=True)) or 0.0
+            chg_abs = _to_float(cells[change_idx].get_text(strip=True)) or 0.0
 
-        prev = price - change_abs
-        change_pct = (change_abs / prev * 100) if prev else 0.0
+        prev    = price - chg_abs
+        chg_pct = (chg_abs / prev * 100) if prev else 0.0
 
         orig = norm_to_orig[sym_norm]
-
         results[orig] = {
-            "price": round(price, 4),
-            "source": "afx.kwayisi.org ✓",
-            "change_pct": round(change_pct, 2),
-            "change_abs": round(change_abs, 4),
+            "price":      price,
+            "source":     "afx.kwayisi.org ✓",
+            "change_pct": round(chg_pct, 2),
+            "change_abs": round(chg_abs, 4),
         }
-
-        debug.append(
-            f"✓ {orig}: {price} (Δ {change_abs:+.4f}, {change_pct:+.2f}%)"
-        )
-
+        debug.append(f"  ✓ {orig}: {price} (chg {chg_abs:+.4f}, {chg_pct:+.2f}%)")
         matched += 1
 
-    debug.append(f"Matched {matched}/{len(tickers)} tickers")
-
+    still = [t for t in tickers if t not in results]
+    if still:
+        debug.append(f"⚠ No price found for: {still}")
+    debug.append(f"Matched: {matched}/{len(tickers)}")
     return results, "\n".join(debug)
-
-
-
-@st.cache_data(ttl=30, show_spinner=False)
-def fetch_live_prices(tickers: tuple) -> tuple[dict, str]:
-    """Fetch prices directly (no threading)."""
-
-    import requests, urllib3
-    urllib3.disable_warnings()
-
-    debug = []
-
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/html"
-    }
-
-    try:
-
-        r = requests.get(
-            "https://afx.kwayisi.org/gse/",
-            headers=headers,
-            timeout=10,
-            verify=False
-        )
-
-        debug.append(f"HTTP {r.status_code}")
-        debug.append(f"HTML size: {len(r.text)}")
-
-        if r.status_code != 200:
-            return {}, "\n".join(debug)
-
-        results, parse_debug = _parse_afx_html(r.text, tickers)
-
-        return results, "\n".join(debug) + "\n" + parse_debug
-
-    except Exception as e:
-
-        return {}, f"Fetch error: {str(e)}"
 
 
 
@@ -694,27 +652,75 @@ def main():
     live_prices = {}
     fetch_debug = ""
 
-    # Sidebar: paste-HTML fallback (always available)
-    with st.sidebar:
-        st.markdown("### 📋 Paste Page Source")
-        st.caption(
-            "If auto-fetch times out, open "
-            "[afx.kwayisi.org/gse](https://afx.kwayisi.org/gse/) "
-            "in your browser → **Ctrl+U** (View Source) → **Ctrl+A, Ctrl+C** → paste below."
-        )
-        pasted_html = st.text_area(
-            "Paste HTML here",
-            height=120,
-            placeholder="<!DOCTYPE html>...",
-            label_visibility="collapsed",
-        )
+    # ── Source priority ───────────────────────────────────────────────────────
+    # 1. Streamlit Secrets  →  Settings > Secrets > paste HTML as gse_html = "..."
+    # 2. Session state      →  uploaded/pasted in sidebar this session
+    # 3. Live network fetch →  last resort (may time out)
 
-    # If user pasted HTML, parse it immediately (no network needed)
-    if pasted_html and pasted_html.strip().startswith("<"):
-        live_prices, fetch_debug = _parse_afx_html(pasted_html, tickers)
-        fetch_debug = "📋 Parsed from pasted HTML\n" + fetch_debug
+    html_source  = ""
+    html_origin  = ""
+
+    # 1. Secrets (stored base64-encoded to avoid TOML escaping issues)
+    try:
+        import base64 as _b64
+        html_source = _b64.b64decode(st.secrets["gse_html_b64"]).decode("utf-8")
+        html_origin = "Streamlit Secrets"
+    except Exception:
+        pass
+
+    # 2. Session state (sidebar upload / paste)
+    if not html_source:
+        html_source = st.session_state.get("gse_html", "")
+        html_origin = st.session_state.get("gse_html_name", "session")
+
+    # Sidebar — only shown when secrets not configured
+    secrets_ok = bool(st.secrets.get("gse_html_b64", ""))
+    with st.sidebar:
+        st.markdown("### 📡 GSE Prices")
+        if secrets_ok:
+            st.success("✅ Loaded from Streamlit Secrets")
+            st.caption(
+                "To update prices: paste fresh HTML into "
+                "**Settings → Secrets** as `gse_html`."
+            )
+        else:
+            st.info(
+                "**Quickest fix:** paste the page HTML into "
+                "**Settings → Secrets** (bottom-left of your Streamlit Cloud dashboard) as:\n"
+                "```\ngse_html = \"\"\"\n<!DOCTYPE html>...\n\"\"\"\n```\n"
+                "Then the app loads prices automatically on every run."
+            )
+            st.divider()
+            st.caption("**This session only — upload or paste:**")
+            uploaded_html = st.file_uploader(
+                "Upload gse.html",
+                type=["html", "htm", "txt"],
+                label_visibility="visible",
+            )
+            if uploaded_html:
+                st.session_state["gse_html"] = uploaded_html.read().decode("utf-8", errors="ignore")
+                st.session_state["gse_html_name"] = uploaded_html.name
+                html_source = st.session_state["gse_html"]
+                html_origin = uploaded_html.name
+
+            pasted = st.text_area(
+                "Or paste page source",
+                height=80,
+                placeholder="<!DOCTYPE html>...",
+                label_visibility="visible",
+            )
+            if pasted and pasted.strip().startswith("<"):
+                st.session_state["gse_html"] = pasted
+                st.session_state["gse_html_name"] = "pasted"
+                html_source = pasted
+                html_origin = "pasted"
+
+    # Parse whichever source we have
+    if html_source:
+        live_prices, fetch_debug = _parse_afx_html(html_source, tickers)
+        fetch_debug = f"📂 Source: {html_origin}\n" + fetch_debug
     else:
-        with st.spinner("📡 Fetching live prices from afx.kwayisi.org..."):
+        with st.spinner("📡 Trying live fetch from afx.kwayisi.org..."):
             try:
                 live_prices, fetch_debug = fetch_live_prices(tickers)
             except Exception as ex:
