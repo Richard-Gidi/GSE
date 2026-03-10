@@ -1,16 +1,14 @@
 """
-IC Securities Portfolio Analyser — Streamlit Dashboard
-=======================================================
+IC Securities Portfolio Analyser
 Install:  pip install streamlit plotly pdfplumber pandas requests beautifulsoup4 lxml
-Run:      streamlit run streamlit_dashboard.py
+Run:      streamlit run akwasi.py
 """
 
-import io, re, warnings
+import base64, io, re, warnings
 from datetime import datetime
 
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 from plotly.subplots import make_subplots
 import pdfplumber
 import streamlit as st
@@ -18,309 +16,248 @@ import streamlit as st
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PAGE CONFIG
+# THEME
 # ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="IC Portfolio Analyser",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="collapsed",
+BG     = "#0f1117"
+CARD   = "#1a1d2e"
+BORDER = "#232640"
+PURPLE = "#6c63ff"
+GREEN  = "#00d68f"
+RED    = "#ff3d71"
+AMBER  = "#ffaa00"
+BLUE   = "#0095ff"
+MUTED  = "#8892b0"
+TEXT   = "#e8eaf6"
+
+T = dict(
+    paper_bgcolor=BG, plot_bgcolor=CARD,
+    font=dict(color=TEXT, family="Segoe UI, system-ui"),
+    xaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER),
+    yaxis=dict(gridcolor=BORDER, zerolinecolor=BORDER),
+    margin=dict(l=16, r=16, t=44, b=16),
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CUSTOM CSS
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<style>
-/* ── Global ── */
-html, body, [class*="css"] {
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-}
-.stApp { background: #0f1117; }
+st.set_page_config(page_title="IC Portfolio Analyser", page_icon="📈",
+                   layout="wide", initial_sidebar_state="collapsed")
 
-/* ── KPI cards ── */
-.kpi-card {
-    background: #1a1d2e;
-    border-radius: 14px;
-    padding: 18px 20px;
-    border-left: 4px solid #6c63ff;
-    margin-bottom: 4px;
-    transition: transform .15s;
-}
-.kpi-card:hover { transform: translateY(-2px); }
-.kpi-card.green  { border-left-color: #00d68f; }
-.kpi-card.red    { border-left-color: #ff3d71; }
-.kpi-card.yellow { border-left-color: #ffaa00; }
-.kpi-card.blue   { border-left-color: #0095ff; }
-.kpi-label { font-size: .72rem; color: #8892b0; text-transform: uppercase;
-             letter-spacing: .06em; margin-bottom: 6px; }
-.kpi-value { font-size: 1.45rem; font-weight: 800; color: #e8eaf6; }
-.kpi-sub   { font-size: .75rem; color: #8892b0; margin-top: 4px; }
-.pos { color: #00d68f !important; }
-.neg { color: #ff3d71 !important; }
+st.markdown(f"""<style>
+html, body, [class*="css"] {{ font-family: 'Segoe UI', system-ui, sans-serif; }}
+.stApp {{ background:{BG}; }}
+hr {{ border-color:{BORDER} !important; margin:20px 0 !important; }}
 
-/* ── Section headers ── */
-.section-hdr {
-    font-size: 1rem; font-weight: 700; color: #e8eaf6;
-    border-left: 4px solid #6c63ff; padding-left: 10px;
-    margin: 8px 0 14px;
-}
+.kpi {{ background:{CARD}; border-radius:14px; padding:18px 20px;
+        border-left:4px solid {PURPLE}; margin-bottom:4px; transition:transform .15s; }}
+.kpi:hover {{ transform:translateY(-2px); }}
+.kpi.g {{ border-left-color:{GREEN}; }}
+.kpi.r {{ border-left-color:{RED}; }}
+.kpi.y {{ border-left-color:{AMBER}; }}
+.kpi.b {{ border-left-color:{BLUE}; }}
+.kpi-lbl {{ font-size:.72rem; color:{MUTED}; text-transform:uppercase;
+            letter-spacing:.06em; margin-bottom:6px; }}
+.kpi-val {{ font-size:1.45rem; font-weight:800; color:{TEXT}; }}
+.kpi-sub {{ font-size:.75rem; color:{MUTED}; margin-top:4px; }}
 
-/* ── Insight row ── */
-.insight-box {
-    background: #1a1d2e; border: 1px solid #232640;
-    border-radius: 12px; padding: 14px 16px; text-align: center;
-}
-.insight-icon { font-size: 1.6rem; }
-.insight-lbl  { font-size: .7rem; color: #8892b0; text-transform: uppercase;
-                letter-spacing: .05em; margin: 6px 0 2px; }
-.insight-val  { font-size: 1rem; font-weight: 700; color: #e8eaf6; }
+.ibox {{ background:{CARD}; border:1px solid {BORDER}; border-radius:12px;
+         padding:14px 16px; text-align:center; height:100%; }}
+.ibox-icon {{ font-size:1.6rem; }}
+.ibox-lbl  {{ font-size:.7rem; color:{MUTED}; text-transform:uppercase;
+              letter-spacing:.05em; margin:6px 0 2px; }}
+.ibox-val  {{ font-size:1rem; font-weight:700; color:{TEXT}; }}
 
-/* ── Price source badge ── */
-.price-badge {
-    display: inline-block; background: #00d68f22; color: #00d68f;
-    padding: 3px 10px; border-radius: 20px; font-size: .75rem;
-    font-weight: 600; margin-left: 8px;
-}
-.price-badge.stale { background: #ffaa0022; color: #ffaa00; }
-.price-badge.manual { background: #6c63ff22; color: #6c63ff; }
+.shdr {{ font-size:1rem; font-weight:700; color:{TEXT};
+         border-left:4px solid {PURPLE}; padding-left:10px; margin:8px 0 14px; }}
 
-/* ── Upload zone ── */
-[data-testid="stFileUploadDropzone"] {
-    background: #1a1d2e !important;
-    border: 2px dashed #6c63ff55 !important;
-    border-radius: 14px !important;
-    padding: 32px !important;
-}
-[data-testid="stFileUploadDropzone"]:hover {
-    border-color: #6c63ff !important;
-}
+.pos {{ color:{GREEN} !important; }}
+.neg {{ color:{RED}   !important; }}
 
-/* ── Dataframe ── */
-[data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
+.hero {{ font-size:2.4rem; font-weight:900;
+         background:linear-gradient(135deg,{PURPLE},{GREEN});
+         -webkit-background-clip:text; -webkit-text-fill-color:transparent; }}
+.hero-sub {{ color:{MUTED}; font-size:1rem; margin-top:4px; }}
 
-/* ── Plotly charts ── */
-.js-plotly-plot { border-radius: 12px; }
+[data-testid="stFileUploadDropzone"] {{
+    background:{CARD} !important; border:2px dashed {PURPLE}55 !important;
+    border-radius:14px !important; padding:32px !important; }}
+[data-testid="stDataFrame"] {{ border-radius:12px; overflow:hidden; }}
+.js-plotly-plot {{ border-radius:12px; }}
+</style>""", unsafe_allow_html=True)
 
-/* ── Divider ── */
-hr { border-color: #232640 !important; margin: 20px 0 !important; }
-
-/* ── Header gradient ── */
-.hero-title {
-    font-size: 2.4rem; font-weight: 900;
-    background: linear-gradient(135deg, #6c63ff, #00d68f);
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-}
-.hero-sub { color: #8892b0; font-size: 1rem; margin-top: 4px; }
-</style>
-""", unsafe_allow_html=True)
-
-PLOTLY_THEME = dict(
-    paper_bgcolor="#0f1117",
-    plot_bgcolor="#1a1d2e",
-    font=dict(color="#e8eaf6", family="Segoe UI, system-ui"),
-    xaxis=dict(gridcolor="#232640", zerolinecolor="#232640"),
-    yaxis=dict(gridcolor="#232640", zerolinecolor="#232640"),
-    margin=dict(l=16, r=16, t=40, b=16),
-)
-
-STOCK_COLORS = [
-    "#6c63ff","#00d68f","#ff3d71","#ffaa00","#0095ff",
-    "#ff6b6b","#48dbfb","#ff9f43","#a29bfe","#fd79a8",
-]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIVE PRICE FETCHER  — afx.kwayisi.org
-#
-# The page table at https://afx.kwayisi.org/gse/ has exactly these columns:
-#   Ticker | Name | Volume | Price | Change
-#
-# Strategy:
-#   1. Try fetching the URL directly (fast 5 s timeout, background thread)
-#   2. If that fails, parse whatever HTML the user pastes into the sidebar
+# SMALL HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
+def kpi(label, value, sub="", cls=""):
+    sub_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
+    return (f"<div class='kpi {cls}'><div class='kpi-lbl'>{label}</div>"
+            f"<div class='kpi-val'>{value}</div>{sub_html}</div>")
 
-_AFX_URL = "https://afx.kwayisi.org/gse/"
-_TIMEOUT  = 5
+def insight(icon, label, value, cls=""):
+    return (f"<div class='ibox'><div class='ibox-icon'>{icon}</div>"
+            f"<div class='ibox-lbl'>{label}</div>"
+            f"<div class='ibox-val {cls}'>{value}</div></div>")
 
-_FETCH_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "text/html,*/*",
-}
+def shdr(text):
+    st.markdown(f"<div class='shdr'>{text}</div>", unsafe_allow_html=True)
 
+def pn(v):
+    return "pos" if v >= 0 else "neg"
 
-def _normalize(s: str) -> str:
+def _normalize(s):
     return re.sub(r"[^A-Z0-9]", "", s.upper())
 
-
-def _to_float(val) -> float | None:
+def _to_float(val):
     try:
-        if pd.isna(val):
-            return None
         f = float(re.sub(r"[^\d.\-]", "", str(val).replace(",", "")))
         return f if f == f else None
     except Exception:
         return None
 
+def tx_type(desc):
+    if re.search(r"\bBought\b",              desc, re.I): return "Buy"
+    if re.search(r"\bSold\b",                desc, re.I): return "Sell"
+    if re.search(r"Contribution|Funding",    desc, re.I): return "Credit"
+    if re.search(r"Withdrawal|Transfer.*Payout", desc, re.I): return "Withdrawal"
+    return "Other"
 
-def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
-    """
-    Parse afx.kwayisi.org/gse/ HTML directly with BeautifulSoup.
 
-    The page has ONE main stock table (inside <div class="t">) with columns:
-        Ticker | Name | Volume | Price | Change
-
-    Each Ticker cell is:  <td><a href="...gse/mtngh.html">MTNGH</a></td>
-    Price / Change cells: plain text <td>6.36</td>  or  <td class="hi">+0.42</td>
-    """
+# ─────────────────────────────────────────────────────────────────────────────
+# PRICE PARSER  —  afx.kwayisi.org/gse/
+# ─────────────────────────────────────────────────────────────────────────────
+def _parse_afx_html(html: str, tickers: tuple) -> dict:
     from bs4 import BeautifulSoup
-
     norm_to_orig = {_normalize(t): t for t in tickers}
-    wanted_norm  = set(norm_to_orig.keys())
-    results, debug = {}, []
+    wanted       = set(norm_to_orig)
+    results      = {}
 
-    soup = BeautifulSoup(html, "html.parser")
-
-    # The main table sits inside <div class="t">
-    container = soup.find("div", class_="t")
-    table = container.find("table") if container else None
-
-    # Fallback: find any table whose header contains "Ticker"
-    if table is None:
+    soup  = BeautifulSoup(html, "html.parser")
+    table = None
+    div   = soup.find("div", class_="t")
+    if div:
+        table = div.find("table")
+    if not table:
         for tbl in soup.find_all("table"):
-            headers = [th.get_text(strip=True) for th in tbl.find_all("th")]
-            if "Ticker" in headers:
+            hdrs = [th.get_text(strip=True) for th in tbl.find_all("th")]
+            if "Ticker" in hdrs and "Price" in hdrs:
                 table = tbl
-                debug.append("Found table via header fallback")
                 break
+    if not table:
+        return {}
 
-    if table is None:
-        debug.append("❌ Could not find stock table in HTML")
-        # Show what tables exist
-        for i, tbl in enumerate(soup.find_all("table")):
-            hdrs = [th.get_text(strip=True) for th in tbl.find_all("th")][:6]
-            debug.append(f"  Table {i} headers: {hdrs}")
-        return {}, "\n".join(debug)
+    headers    = [th.get_text(strip=True) for th in table.find_all("th")]
+    ticker_idx = headers.index("Ticker")
+    price_idx  = headers.index("Price")
+    change_idx = headers.index("Change") if "Change" in headers else None
 
-    # Identify column positions from <thead>
-    headers = [th.get_text(strip=True) for th in table.find_all("th")]
-    debug.append(f"Table headers: {headers}")
-
-    try:
-        ticker_idx = headers.index("Ticker")
-        price_idx  = headers.index("Price")
-        change_idx = headers.index("Change") if "Change" in headers else None
-    except ValueError as e:
-        debug.append(f"❌ Missing expected column: {e}")
-        return {}, "\n".join(debug)
-
-    matched = 0
     for tr in table.find("tbody").find_all("tr"):
         cells = tr.find_all("td")
         if len(cells) <= price_idx:
             continue
-
-        ticker_raw = cells[ticker_idx].get_text(strip=True)
-        sym_norm   = _normalize(ticker_raw)
-        if sym_norm not in wanted_norm:
+        sym = _normalize(cells[ticker_idx].get_text(strip=True))
+        if sym not in wanted:
             continue
-
-        price_raw = cells[price_idx].get_text(strip=True)
-        price     = _to_float(price_raw)
+        price = _to_float(cells[price_idx].get_text(strip=True))
         if not price or price <= 0:
             continue
-
-        chg_abs = 0.0
-        if change_idx is not None and len(cells) > change_idx:
-            chg_abs = _to_float(cells[change_idx].get_text(strip=True)) or 0.0
-
-        prev    = price - chg_abs
-        chg_pct = (chg_abs / prev * 100) if prev else 0.0
-
-        orig = norm_to_orig[sym_norm]
-        results[orig] = {
+        chg  = (_to_float(cells[change_idx].get_text(strip=True)) or 0.0
+                if change_idx and len(cells) > change_idx else 0.0)
+        prev = price - chg
+        results[norm_to_orig[sym]] = {
             "price":      price,
-            "source":     "afx.kwayisi.org ✓",
-            "change_pct": round(chg_pct, 2),
-            "change_abs": round(chg_abs, 4),
+            "change_abs": chg,
+            "change_pct": round((chg / prev * 100) if prev else 0.0, 2),
         }
-        debug.append(f"  ✓ {orig}: {price} (chg {chg_abs:+.4f}, {chg_pct:+.2f}%)")
-        matched += 1
+    return results
 
-    still = [t for t in tickers if t not in results]
-    if still:
-        debug.append(f"⚠ No price found for: {still}")
-    debug.append(f"Matched: {matched}/{len(tickers)}")
-    return results, "\n".join(debug)
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_live(tickers: tuple) -> dict:
+    import requests, urllib3
+    urllib3.disable_warnings()
+    try:
+        r = requests.get("https://afx.kwayisi.org/gse/",
+                         headers={"User-Agent": "Mozilla/5.0"},
+                         timeout=10, verify=False)
+        if r.status_code == 200:
+            return _parse_afx_html(r.text, tickers)
+    except Exception:
+        pass
+    return {}
+
+
+def get_live_prices(tickers: tuple) -> dict:
+    # 1. Streamlit Secrets (base64-encoded HTML)
+    try:
+        html = base64.b64decode(st.secrets["gse_html_b64"]).decode("utf-8")
+        return _parse_afx_html(html, tickers)
+    except Exception:
+        pass
+    # 2. Session state (sidebar upload / paste)
+    html = st.session_state.get("gse_html", "")
+    if html:
+        return _parse_afx_html(html, tickers)
+    # 3. Live network fetch
+    return _fetch_live(tickers)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PDF PARSER
 # ─────────────────────────────────────────────────────────────────────────────
 def parse_pdf(pdf_bytes: bytes) -> dict:
-    equities, transactions, portfolio_summary = [], [], {}
-    funds_data = {}
+    equities, transactions, portfolio_summary, funds_data = [], [], {}, {}
 
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         full_text = "\n".join(p.extract_text() or "" for p in pdf.pages)
-
     lines = full_text.split("\n")
 
-    # ── Portfolio summary ──
+    # Portfolio summary
     for i, line in enumerate(lines):
         if "Total Value" in line and "Allocation" in line:
-            for j in range(i + 1, min(i + 10, len(lines))):
-                l = lines[j].strip()
-                m = re.match(
-                    r"(Funds|Fixed Income|Equities|Cash)\s+([\d,\.]+)\s+([\d\.]+)", l)
+            for l in lines[i+1 : i+10]:
+                m = re.match(r"(Funds|Fixed Income|Equities|Cash)\s+([\d,\.]+)\s+([\d\.]+)", l.strip())
                 if m:
                     portfolio_summary[m.group(1)] = {
                         "value": float(m.group(2).replace(",", "")),
                         "alloc": float(m.group(3)),
                     }
-                m2 = re.match(r"([\d,\.]+)\s+100\.00", l)
+                m2 = re.match(r"([\d,\.]+)\s+100\.00", l.strip())
                 if m2:
                     portfolio_summary["Total"] = float(m2.group(1).replace(",", ""))
 
-    # ── Funds ──
+    # Funds
     m = re.search(
-        r"IC Liquidity\s+([\d,\.]+)\s+-([\d,\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)",
-        full_text)
+        r"IC Liquidity\s+([\d,\.]+)\s+-([\d,\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)", full_text)
     if m:
         funds_data = {
             "name": "IC Liquidity",
-            "invested":      float(m.group(1).replace(",", "")),
-            "redeemed":      float(m.group(2).replace(",", "")),
-            "gain_loss":     float(m.group(3)),
-            "market_price":  float(m.group(4)),
-            "market_value":  float(m.group(5)),
+            "invested":     float(m.group(1).replace(",", "")),
+            "redeemed":     float(m.group(2).replace(",", "")),
+            "market_value": float(m.group(5)),
         }
 
-    # ── Equities ──
+    # Equities
     equity_pat = re.compile(
         r"^([A-Z]{2,8})\s+(GH[A-Z0-9]+|TG[A-Z0-9]+)\s+([\d,\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d,\.]+)")
     for line in lines:
         m = equity_pat.match(line.strip())
         if m:
-            qty   = float(m.group(3).replace(",", ""))
-            cost  = float(m.group(4))
-            price = float(m.group(5))
-            mval  = float(m.group(6).replace(",", ""))
-            total_cost = qty * cost
-            gl    = mval - total_cost
-            glpct = (gl / total_cost * 100) if total_cost > 0 else 0
+            qty  = float(m.group(3).replace(",", ""))
+            cost = float(m.group(4))
+            tc   = qty * cost
+            mv   = float(m.group(6).replace(",", ""))
+            gl   = mv - tc
             equities.append({
-                "ticker": m.group(1), "isin": m.group(2),
-                "qty": qty, "avg_cost": cost,
-                "statement_price": price,
-                "live_price": None, "price_source": "Statement",
-                "market_value": mval,
-                "total_cost": total_cost,
-                "gain_loss": gl, "gain_pct": glpct,
+                "ticker":          m.group(1),
+                "qty":             qty,
+                "avg_cost":        cost,
+                "statement_price": float(m.group(5)),
+                "live_price":      None,
+                "market_value":    mv,
+                "total_cost":      tc,
+                "gain_loss":       gl,
+                "gain_pct":        (gl / tc * 100) if tc else 0,
             })
 
-    # ── Transactions ──
+    # Transactions
     for line in lines:
         line = line.strip()
         dm = re.match(r"^(\d{2}/\d{2}/\d{4})\s+(.*)", line)
@@ -333,11 +270,13 @@ def parse_pdf(pdf_bytes: bytes) -> dict:
                 credit = float(nums[-2].replace(",", ""))
                 debit  = float(nums[-1].replace(",", ""))
                 desc   = rest[: rest.rfind(nums[-2])].strip()
-                dt     = datetime.strptime(date_str, "%d/%m/%Y")
                 transactions.append({
-                    "date": dt, "date_str": date_str, "description": desc,
-                    "credit": credit if credit > 0 else 0,
-                    "debit":  abs(debit) if debit < 0 else 0,
+                    "date":        datetime.strptime(date_str, "%d/%m/%Y"),
+                    "date_str":    date_str,
+                    "description": desc,
+                    "credit":      credit if credit > 0 else 0,
+                    "debit":       abs(debit) if debit < 0 else 0,
+                    "type":        tx_type(desc),
                 })
             except Exception:
                 pass
@@ -350,13 +289,13 @@ def parse_pdf(pdf_bytes: bytes) -> dict:
         return re.split(r"\s{3,}|\s+(?:Report Date|Account Number|Address|Report Currency):", v)[0].strip()
 
     return {
-        "equities": equities,
-        "transactions": transactions,
+        "equities":          equities,
+        "transactions":      transactions,
         "portfolio_summary": portfolio_summary,
-        "funds": funds_data,
-        "client_name":    _field("Client Name:"),
-        "account_number": _field("Account Number:"),
-        "report_date":    _field("Report Date:"),
+        "funds":             funds_data,
+        "client_name":       _field("Client Name:"),
+        "account_number":    _field("Account Number:"),
+        "report_date":       _field("Report Date:"),
     }
 
 
@@ -364,711 +303,635 @@ def parse_pdf(pdf_bytes: bytes) -> dict:
 # INJECT LIVE PRICES
 # ─────────────────────────────────────────────────────────────────────────────
 def inject_live_prices(equities: list, live: dict) -> list:
-    updated = []
+    out = []
     for e in equities:
         e = e.copy()
-        t = e["ticker"]
-        if t in live:
-            lp   = live[t]["price"]
-            src  = live[t]["source"]
-            chg  = live[t]["change_pct"]
-            chga = live[t].get("change_abs", 0.0)
-            mval = e["qty"] * lp
-            gl   = mval - e["total_cost"]
-            glp  = (gl / e["total_cost"] * 100) if e["total_cost"] else 0
+        if e["ticker"] in live:
+            lp = live[e["ticker"]]["price"]
+            mv = e["qty"] * lp
+            gl = mv - e["total_cost"]
             e.update({
-                "live_price":     lp,
-                "price_source":   src,
-                "price_change":   chg,
-                "price_change_abs": chga,
-                "market_value":   mval,
-                "gain_loss":      gl,
-                "gain_pct":       glp,
+                "live_price":   lp,
+                "market_value": mv,
+                "gain_loss":    gl,
+                "gain_pct":     (gl / e["total_cost"] * 100) if e["total_cost"] else 0,
+                "change_pct":   live[e["ticker"]]["change_pct"],
+                "change_abs":   live[e["ticker"]]["change_abs"],
             })
         else:
-            e["live_price"]       = None
-            e["price_source"]     = "Statement"
-            e["price_change"]     = 0.0
-            e["price_change_abs"] = 0.0
-        updated.append(e)
-    return updated
+            e["live_price"] = e["change_pct"] = e["change_abs"] = None
+        out.append(e)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CHART BUILDERS (Plotly)
+# CHARTS
 # ─────────────────────────────────────────────────────────────────────────────
-def chart_allocation(ps):
-    labels, values, colors = [], [], []
-    cm = {"Equities": "#6c63ff", "Cash": "#0095ff",
-          "Funds": "#ffaa00", "Fixed Income": "#00d68f"}
+def chart_gain_loss(eq):
+    df = pd.DataFrame(eq).sort_values("gain_pct")
+    colors = [GREEN if v >= 0 else RED for v in df["gain_pct"]]
+    fig = go.Figure(go.Bar(
+        x=df["gain_pct"], y=df["ticker"], orientation="h",
+        marker=dict(color=colors, line=dict(width=0)),
+        text=[f"{v:+.1f}%" for v in df["gain_pct"]], textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Return: %{x:.2f}%<extra></extra>",
+    ))
+    fig.add_vline(x=0, line_color=MUTED, line_dash="dash", line_width=1)
+    fig.update_layout(title="Return per Stock (%)", xaxis_title="Return (%)", **T, height=380)
+    return fig
+
+
+def chart_pl_waterfall(eq):
+    df    = pd.DataFrame(eq).sort_values("gain_loss")
+    total = df["gain_loss"].sum()
+    vals  = df["gain_loss"].tolist() + [total]
+    cols  = [GREEN if v >= 0 else RED for v in vals]
+    fig = go.Figure(go.Bar(
+        x=df["ticker"].tolist() + ["TOTAL"],
+        y=vals,
+        marker_color=cols,
+        text=[f"{'+'if v>=0 else ''}GHS {v:,.0f}" for v in vals],
+        textposition="outside",
+        hovertemplate="<b>%{x}</b><br>P&L: GHS %{y:,.2f}<extra></extra>",
+    ))
+    fig.add_hline(y=0, line_color=MUTED, line_dash="dash", line_width=1)
+    fig.update_layout(title="P&L Contribution per Stock (GHS)", yaxis_title="GHS",
+                      **T, height=340)
+    return fig
+
+
+def chart_market_vs_cost(eq):
+    df = pd.DataFrame(eq).sort_values("market_value", ascending=False)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Cost Basis",   x=df["ticker"], y=df["total_cost"],
+                         marker_color=BLUE, opacity=0.85,
+                         hovertemplate="%{x}: GHS %{y:,.2f}<extra>Cost</extra>"))
+    fig.add_trace(go.Bar(name="Market Value", x=df["ticker"], y=df["market_value"],
+                         marker_color=PURPLE, opacity=0.85,
+                         hovertemplate="%{x}: GHS %{y:,.2f}<extra>Market</extra>"))
+    fig.update_layout(title="Market Value vs Cost Basis", yaxis_title="GHS",
+                      barmode="group", legend=dict(bgcolor=CARD, bordercolor=BORDER),
+                      **T, height=360)
+    return fig
+
+
+def chart_allocation_treemap(ps):
+    cmap = {"Equities": PURPLE, "Cash": BLUE, "Funds": AMBER, "Fixed Income": GREEN}
+    labels, parents, values, colors = [], [], [], []
     for k, v in ps.items():
         if k == "Total" or v["value"] == 0:
             continue
         labels.append(k)
+        parents.append("")
         values.append(v["value"])
-        colors.append(cm.get(k, "#ccc"))
-    fig = go.Figure(go.Pie(
-        labels=labels, values=values,
-        hole=0.55, marker=dict(colors=colors, line=dict(color="#0f1117", width=3)),
-        textinfo="label+percent", textfont=dict(size=12),
+        colors.append(cmap.get(k, MUTED))
+    fig = go.Figure(go.Treemap(
+        labels=labels, parents=parents, values=values,
+        marker=dict(colors=colors, line=dict(width=2, color=BG)),
+        texttemplate="<b>%{label}</b><br>GHS %{value:,.0f}<br>%{percentRoot:.1%}",
+        hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f}<extra></extra>",
     ))
-    fig.update_layout(title="Portfolio Allocation", **PLOTLY_THEME,
-                      showlegend=False, height=340)
+    fig.update_layout(title="Portfolio Allocation", **T, height=320,
+                      margin=dict(l=8, r=8, t=44, b=8))
     return fig
 
 
-def chart_gain_loss(equities):
-    df = pd.DataFrame(equities).sort_values("gain_pct")
-    colors = [("#00d68f" if v >= 0 else "#ff3d71") for v in df["gain_pct"]]
+def chart_stock_weight_bar(eq):
+    df    = pd.DataFrame(eq).sort_values("market_value")
+    total = df["market_value"].sum()
+    df["weight"] = df["market_value"] / total * 100
     fig = go.Figure(go.Bar(
-        x=df["gain_pct"], y=df["ticker"], orientation="h",
-        marker=dict(color=colors, line=dict(width=0)),
-        text=[f"{v:+.1f}%" for v in df["gain_pct"]],
-        textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Return: %{x:.2f}%<extra></extra>",
+        x=df["weight"], y=df["ticker"], orientation="h",
+        marker=dict(color=df["weight"],
+                    colorscale=[[0, BLUE],[0.5, PURPLE],[1, GREEN]],
+                    line=dict(width=0)),
+        text=[f"{w:.1f}%" for w in df["weight"]], textposition="outside",
+        customdata=df["market_value"],
+        hovertemplate="<b>%{y}</b><br>Weight: %{x:.2f}%<br>GHS %{customdata:,.2f}<extra></extra>",
     ))
-    fig.add_vline(x=0, line_color="#8892b0", line_dash="dash", line_width=1)
-    fig.update_layout(title="Gain / Loss per Stock (%)",
-                      xaxis_title="Return (%)", **PLOTLY_THEME, height=380)
+    fig.update_layout(title="Stock Weight in Equity Portfolio", xaxis_title="Weight (%)",
+                      **T, height=360, showlegend=False)
     return fig
 
 
-def chart_market_vs_cost(equities):
-    df = pd.DataFrame(equities).sort_values("market_value", ascending=False)
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name="Cost Basis", x=df["ticker"], y=df["total_cost"],
-        marker_color="#0095ff", opacity=0.85,
-        hovertemplate="%{x}: GHS %{y:,.2f}<extra>Cost</extra>",
-    ))
-    fig.add_trace(go.Bar(
-        name="Market Value", x=df["ticker"], y=df["market_value"],
-        marker_color="#6c63ff", opacity=0.85,
-        hovertemplate="%{x}: GHS %{y:,.2f}<extra>Market</extra>",
-    ))
-    fig.update_layout(title="Market Value vs Cost Basis",
-                      yaxis_title="GHS", barmode="group",
-                      legend=dict(bgcolor="#1a1d2e", bordercolor="#232640"),
-                      **PLOTLY_THEME, height=360)
-    return fig
-
-
-def chart_cashflow(transactions):
-    df = pd.DataFrame(transactions)
-    if df.empty:
-        return None
-    df["month"] = df["date"].dt.to_period("M")
-    m = df.groupby("month").agg(
-        credits=("credit", "sum"), debits=("debit", "sum")
-    ).reset_index()
-    m["month_str"] = m["month"].astype(str)
-    m["net"] = m["credits"] - m["debits"]
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name="Credits", x=m["month_str"], y=m["credits"],
-        marker_color="#00d68f", opacity=0.85,
-        hovertemplate="%{x}<br>Credits: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.add_trace(go.Bar(
-        name="Debits", x=m["month_str"], y=m["debits"],
-        marker_color="#ff3d71", opacity=0.85,
-        hovertemplate="%{x}<br>Debits: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        name="Net", x=m["month_str"], y=m["net"],
-        mode="lines+markers", line=dict(color="#ffaa00", width=2),
-        marker=dict(size=5),
-        hovertemplate="%{x}<br>Net: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.add_hline(y=0, line_color="#8892b0", line_dash="dash", line_width=1)
-    fig.update_layout(title="Monthly Cash Flow", barmode="group",
-                      xaxis_tickangle=-30, yaxis_title="GHS",
-                      legend=dict(bgcolor="#1a1d2e"),
-                      **PLOTLY_THEME, height=370)
-    return fig
-
-
-def chart_cumulative(transactions, total_value):
-    df = pd.DataFrame(transactions).sort_values("date")
-    if df.empty:
-        return None
-    df["net"]   = df["credit"] - df["debit"]
-    df["cumul"] = df["net"].cumsum()
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["cumul"], mode="lines",
-        fill="tozeroy", fillcolor="rgba(108,99,255,0.12)",
-        line=dict(color="#6c63ff", width=2), name="Net Invested",
-        hovertemplate="%{x|%b %d %Y}<br>GHS %{y:,.2f}<extra>Net Invested</extra>",
-    ))
-    fig.add_hline(y=total_value, line_color="#00d68f", line_dash="dash",
-                  line_width=2,
-                  annotation_text=f"Portfolio Value GHS {total_value:,.2f}",
-                  annotation_font_color="#00d68f")
-    fig.update_layout(title="Cumulative Net Invested vs Current Portfolio Value",
-                      xaxis_title="Date", yaxis_title="GHS",
-                      **PLOTLY_THEME, height=360)
-    return fig
-
-
-def chart_stock_weight(equities):
-    df = pd.DataFrame(equities).sort_values("market_value", ascending=False)
-    fig = go.Figure(go.Pie(
-        labels=df["ticker"], values=df["market_value"],
-        hole=0.4,
-        marker=dict(colors=STOCK_COLORS[:len(df)],
-                    line=dict(color="#0f1117", width=3)),
-        textinfo="label+percent", textfont=dict(size=11),
-        hovertemplate="%{label}<br>GHS %{value:,.2f}<br>%{percent}<extra></extra>",
-    ))
-    fig.update_layout(title="Stock Weight in Equity Portfolio",
-                      showlegend=False, **PLOTLY_THEME, height=340)
-    return fig
-
-
-def chart_price_comparison(equities):
-    df = pd.DataFrame(equities)
+def chart_price_comparison(eq):
+    df = pd.DataFrame(eq)
     df = df[df["live_price"].notna()].copy()
     if df.empty:
         return None
     fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name="Statement Price", x=df["ticker"], y=df["statement_price"],
-        marker_color="#ffaa00", opacity=0.85,
-    ))
-    fig.add_trace(go.Bar(
-        name="Live Price", x=df["ticker"], y=df["live_price"],
-        marker_color="#00d68f", opacity=0.85,
-    ))
-    fig.update_layout(title="Statement Price vs Live Market Price",
-                      yaxis_title="GHS per Share", barmode="group",
-                      legend=dict(bgcolor="#1a1d2e"),
-                      **PLOTLY_THEME, height=340)
+    fig.add_trace(go.Bar(name="Statement Price", x=df["ticker"], y=df["statement_price"],
+                         marker_color=AMBER, opacity=0.85))
+    fig.add_trace(go.Bar(name="Live Price",      x=df["ticker"], y=df["live_price"],
+                         marker_color=GREEN, opacity=0.85))
+    fig.update_layout(title="Statement vs Live Price", yaxis_title="GHS per Share",
+                      barmode="group", legend=dict(bgcolor=CARD), **T, height=320)
     return fig
 
 
-def chart_tx_type_breakdown(transactions):
-    df = pd.DataFrame(transactions)
+def chart_cashflow(txs):
+    df = pd.DataFrame(txs)
     if df.empty:
         return None
-
-    def categorise(desc):
-        if re.search(r"\bBought\b", desc, re.I):   return "Buy"
-        if re.search(r"\bSold\b",   desc, re.I):   return "Sell"
-        if re.search(r"Contribution|Funding",  desc, re.I): return "Credit"
-        if re.search(r"Withdrawal|Transfer.*Payout", desc, re.I): return "Withdrawal"
-        return "Other"
-
-    df["type"] = df["description"].apply(categorise)
-    df["amount"] = df["credit"] + df["debit"]
-    grp = df.groupby("type")["amount"].sum().reset_index()
-    color_map = {"Buy": "#0095ff", "Sell": "#ffaa00",
-                 "Credit": "#00d68f", "Withdrawal": "#ff3d71", "Other": "#8892b0"}
-    fig = go.Figure(go.Bar(
-        x=grp["type"], y=grp["amount"],
-        marker_color=[color_map.get(t, "#ccc") for t in grp["type"]],
-        text=[f"GHS {v:,.0f}" for v in grp["amount"]],
-        textposition="outside",
-        hovertemplate="%{x}: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.update_layout(title="Transaction Volume by Type",
-                      yaxis_title="GHS", **PLOTLY_THEME, height=300)
+    df["month"] = df["date"].dt.to_period("M")
+    m = df.groupby("month").agg(credits=("credit","sum"), debits=("debit","sum")).reset_index()
+    m["month_str"] = m["month"].astype(str)
+    m["net"]       = m["credits"] - m["debits"]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Credits", x=m["month_str"], y=m["credits"],
+                         marker_color=GREEN, opacity=0.85,
+                         hovertemplate="%{x}<br>GHS %{y:,.2f}<extra>Credits</extra>"))
+    fig.add_trace(go.Bar(name="Debits",  x=m["month_str"], y=m["debits"],
+                         marker_color=RED, opacity=0.85,
+                         hovertemplate="%{x}<br>GHS %{y:,.2f}<extra>Debits</extra>"))
+    fig.add_trace(go.Scatter(name="Net", x=m["month_str"], y=m["net"],
+                             mode="lines+markers", line=dict(color=AMBER, width=2),
+                             marker=dict(size=5),
+                             hovertemplate="%{x}<br>Net GHS %{y:,.2f}<extra></extra>"))
+    fig.add_hline(y=0, line_color=MUTED, line_dash="dash", line_width=1)
+    fig.update_layout(title="Monthly Cash Flow", barmode="group",
+                      xaxis_tickangle=-30, yaxis_title="GHS",
+                      legend=dict(bgcolor=CARD), **T, height=370)
     return fig
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-def kpi(label, value, sub="", cls=""):
-    color_cls = cls or ""
-    return f"""
-<div class="kpi-card {color_cls}">
-  <div class="kpi-label">{label}</div>
-  <div class="kpi-value">{value}</div>
-  {"<div class='kpi-sub'>" + sub + "</div>" if sub else ""}
-</div>"""
+def chart_cumulative(txs, total_value):
+    df = pd.DataFrame(txs).sort_values("date")
+    if df.empty:
+        return None
+    df["net"]   = df["credit"] - df["debit"]
+    df["cumul"] = df["net"].cumsum()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["date"], y=df["cumul"], mode="lines",
+        fill="tozeroy", fillcolor="rgba(108,99,255,0.12)",
+        line=dict(color=PURPLE, width=2), name="Net Invested",
+        hovertemplate="%{x|%b %d, %Y}<br>GHS %{y:,.2f}<extra>Net Invested</extra>",
+    ))
+    fig.add_hline(y=total_value, line_color=GREEN, line_dash="dash", line_width=2,
+                  annotation_text=f"Current Value  GHS {total_value:,.0f}",
+                  annotation_font_color=GREEN)
+    fig.update_layout(title="Cumulative Net Invested vs Portfolio Value",
+                      xaxis_title="Date", yaxis_title="GHS", **T, height=340)
+    return fig
 
-def pos_neg_cls(v):
-    return "pos" if v >= 0 else "neg"
+
+def chart_breakeven(eq):
+    losers = [e for e in eq if e["gain_pct"] < 0]
+    if not losers:
+        return None
+    df         = pd.DataFrame(losers)
+    price_col  = df["live_price"].fillna(df["statement_price"])
+    pct_needed = (df["avg_cost"] - price_col) / price_col * 100
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Current Price",    x=df["ticker"], y=price_col,
+                         marker_color=RED, opacity=0.85,
+                         hovertemplate="%{x}<br>Current: GHS %{y:.4f}<extra></extra>"))
+    fig.add_trace(go.Bar(name="Break-even Price", x=df["ticker"], y=df["avg_cost"],
+                         marker_color=AMBER, opacity=0.85,
+                         hovertemplate="%{x}<br>Break-even: GHS %{y:.4f}<extra></extra>"))
+    fig.add_trace(go.Scatter(
+        name="% Rally Needed", x=df["ticker"], y=pct_needed,
+        mode="markers+text", yaxis="y2",
+        marker=dict(size=12, color=AMBER, symbol="diamond"),
+        text=[f"+{v:.1f}%" for v in pct_needed], textposition="top center",
+        hovertemplate="%{x}: needs %{y:.1f}% rally<extra></extra>",
+    ))
+    fig.update_layout(
+        title="Break-even Analysis — Losing Positions",
+        yaxis=dict(title="Price (GHS)", gridcolor=BORDER),
+        yaxis2=dict(title="% Rally Needed", overlaying="y", side="right",
+                    showgrid=False, color=AMBER),
+        barmode="group", legend=dict(bgcolor=CARD), **T, height=360,
+    )
+    return fig
+
+
+def chart_concentration(eq):
+    df  = pd.DataFrame(eq)
+    tot = df["market_value"].sum()
+    w   = df["market_value"] / tot
+    hhi = round((w ** 2).sum() * 10000)
+
+    if hhi < 1500:   risk, risk_color = "Low",      GREEN
+    elif hhi < 2500: risk, risk_color = "Moderate", AMBER
+    else:            risk, risk_color = "High",      RED
+
+    fig = make_subplots(rows=1, cols=2,
+                        subplot_titles=["Concentration (HHI)", "Exposure Ranking"],
+                        specs=[[{"type":"indicator"}, {"type":"xy"}]])
+
+    fig.add_trace(go.Indicator(
+        mode="gauge+number",
+        value=hhi,
+        number=dict(font=dict(color=risk_color, size=32)),
+        gauge=dict(
+            axis=dict(range=[0, 10000], tickcolor=MUTED),
+            bar=dict(color=risk_color),
+            bgcolor=CARD,
+            steps=[
+                dict(range=[0,    1500], color="#00d68f22"),
+                dict(range=[1500, 2500], color="#ffaa0022"),
+                dict(range=[2500,10000], color="#ff3d7122"),
+            ],
+        ),
+        title=dict(text=f"Risk: <b>{risk}</b>", font=dict(color=risk_color)),
+    ), row=1, col=1)
+
+    df_s = df.sort_values("market_value", ascending=True)
+    ws   = (df_s["market_value"] / tot * 100).values
+    fig.add_trace(go.Bar(
+        x=ws, y=df_s["ticker"].values, orientation="h",
+        marker=dict(color=ws, colorscale=[[0,GREEN],[0.5,AMBER],[1,RED]],
+                    line=dict(width=0)),
+        text=[f"{v:.1f}%" for v in ws], textposition="outside",
+        hovertemplate="<b>%{y}</b>: %{x:.1f}%<extra></extra>",
+        showlegend=False,
+    ), row=1, col=2)
+
+    fig.update_layout(
+        paper_bgcolor=BG, plot_bgcolor=CARD,
+        font=dict(color=TEXT, family="Segoe UI"),
+        margin=dict(l=16, r=16, t=60, b=16), height=360,
+        xaxis2=dict(gridcolor=BORDER, title="Weight (%)"),
+        yaxis2=dict(gridcolor=BORDER),
+    )
+    return fig, hhi, risk, risk_color
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# MAIN APP
+# SIDEBAR
+# ─────────────────────────────────────────────────────────────────────────────
+def render_sidebar():
+    with st.sidebar:
+        st.markdown("### 📡 GSE Prices")
+        if st.secrets.get("gse_html_b64", ""):
+            st.success("✅ Loaded from Streamlit Secrets")
+            st.caption("To refresh: update `gse_html_b64` in **Settings → Secrets**.")
+        else:
+            st.info("Add `gse_html_b64` in **Settings → Secrets** for automatic prices.")
+            st.divider()
+            up = st.file_uploader("Upload gse.html", type=["html","htm","txt"])
+            if up:
+                st.session_state["gse_html"]      = up.read().decode("utf-8", errors="ignore")
+                st.session_state["gse_html_name"] = up.name
+            paste = st.text_area("Or paste page source", height=80, placeholder="<!DOCTYPE html>...")
+            if paste and paste.strip().startswith("<"):
+                st.session_state["gse_html"]      = paste
+                st.session_state["gse_html_name"] = "pasted"
+            if "gse_html" in st.session_state:
+                st.success(f"✅ {st.session_state.get('gse_html_name','loaded')}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
-    # ── Hero header ──────────────────────────────────────────────────────────
-    col_logo, col_title = st.columns([1, 8])
-    with col_logo:
-        st.markdown("<div style='font-size:3rem;padding-top:8px'>📈</div>",
-                    unsafe_allow_html=True)
-    with col_title:
-        st.markdown("""
-        <div class="hero-title">IC Portfolio Analyser</div>
-        <div class="hero-sub">Upload your IC Securities statement PDF · Live GSE prices · Instant insights</div>
-        """, unsafe_allow_html=True)
+    render_sidebar()
 
+    # Header
+    cl, ct = st.columns([1, 9])
+    with cl:
+        st.markdown("<div style='font-size:3rem;padding-top:6px'>📈</div>", unsafe_allow_html=True)
+    with ct:
+        st.markdown("<div class='hero'>IC Portfolio Analyser</div>"
+                    "<div class='hero-sub'>Upload your IC Securities statement · "
+                    "Live GSE prices · Instant insights</div>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # ── Upload ────────────────────────────────────────────────────────────────
-    uploaded = st.file_uploader(
-        "**Drop your IC Securities Account Statement (PDF)**",
-        type=["pdf"],
-        help="Supports IC Securities account portfolio statements in standard PDF format",
-    )
-
+    # Upload
+    uploaded = st.file_uploader("**Drop your IC Securities Account Statement (PDF)**", type=["pdf"])
     if not uploaded:
-        # Landing state
         c1, c2, c3, c4 = st.columns(4)
-        for col, icon, label in [
-            (c1, "🏆", "Gain/Loss per Stock"),
-            (c2, "📊", "Portfolio Allocation"),
-            (c3, "💸", "Cash Flow Analysis"),
-            (c4, "📡", "Live GSE Prices"),
-        ]:
+        for col, icon, lbl in [(c1,"🏆","Performance Analysis"),(c2,"🌳","Portfolio Treemap"),
+                                (c3,"🔮","What-If Simulator"),  (c4,"⚖️","Risk & Concentration")]:
             with col:
-                st.markdown(f"""
-                <div class="insight-box">
-                  <div class="insight-icon">{icon}</div>
-                  <div class="insight-lbl">{label}</div>
-                </div>""", unsafe_allow_html=True)
+                st.markdown(f"<div class='ibox'><div class='ibox-icon'>{icon}</div>"
+                            f"<div class='ibox-lbl'>{lbl}</div></div>", unsafe_allow_html=True)
         st.stop()
 
-    # ── Parse PDF ─────────────────────────────────────────────────────────────
+    # Parse PDF
     with st.spinner("📄 Parsing statement..."):
         data = parse_pdf(uploaded.read())
 
-    eq   = data["equities"]
-    txs  = data["transactions"]
-    ps   = data["portfolio_summary"]
+    eq  = data["equities"]
+    txs = data["transactions"]
+    ps  = data["portfolio_summary"]
 
     if not eq:
-        st.error("Could not parse equity data from this PDF. Please check the format.")
+        st.error("Could not parse equity data. Please check the PDF format.")
         st.stop()
 
-    # ── Fetch live prices ─────────────────────────────────────────────────────
+    # Live prices
     tickers = tuple(e["ticker"] for e in eq)
-    live_prices = {}
-    fetch_debug = ""
-
-    # ── Source priority ───────────────────────────────────────────────────────
-    # 1. Streamlit Secrets  →  Settings > Secrets > paste HTML as gse_html = "..."
-    # 2. Session state      →  uploaded/pasted in sidebar this session
-    # 3. Live network fetch →  last resort (may time out)
-
-    html_source  = ""
-    html_origin  = ""
-
-    # 1. Secrets (stored base64-encoded to avoid TOML escaping issues)
-    try:
-        import base64 as _b64
-        html_source = _b64.b64decode(st.secrets["gse_html_b64"]).decode("utf-8")
-        html_origin = "Streamlit Secrets"
-    except Exception:
-        pass
-
-    # 2. Session state (sidebar upload / paste)
-    if not html_source:
-        html_source = st.session_state.get("gse_html", "")
-        html_origin = st.session_state.get("gse_html_name", "session")
-
-    # Sidebar — only shown when secrets not configured
-    secrets_ok = bool(st.secrets.get("gse_html_b64", ""))
-    with st.sidebar:
-        st.markdown("### 📡 GSE Prices")
-        if secrets_ok:
-            st.success("✅ Loaded from Streamlit Secrets")
-            st.caption(
-                "To update prices: paste fresh HTML into "
-                "**Settings → Secrets** as `gse_html`."
-            )
-        else:
-            st.info(
-                "**Quickest fix:** paste the page HTML into "
-                "**Settings → Secrets** (bottom-left of your Streamlit Cloud dashboard) as:\n"
-                "```\ngse_html = \"\"\"\n<!DOCTYPE html>...\n\"\"\"\n```\n"
-                "Then the app loads prices automatically on every run."
-            )
-            st.divider()
-            st.caption("**This session only — upload or paste:**")
-            uploaded_html = st.file_uploader(
-                "Upload gse.html",
-                type=["html", "htm", "txt"],
-                label_visibility="visible",
-            )
-            if uploaded_html:
-                st.session_state["gse_html"] = uploaded_html.read().decode("utf-8", errors="ignore")
-                st.session_state["gse_html_name"] = uploaded_html.name
-                html_source = st.session_state["gse_html"]
-                html_origin = uploaded_html.name
-
-            pasted = st.text_area(
-                "Or paste page source",
-                height=80,
-                placeholder="<!DOCTYPE html>...",
-                label_visibility="visible",
-            )
-            if pasted and pasted.strip().startswith("<"):
-                st.session_state["gse_html"] = pasted
-                st.session_state["gse_html_name"] = "pasted"
-                html_source = pasted
-                html_origin = "pasted"
-
-    # Parse whichever source we have
-    if html_source:
-        live_prices, fetch_debug = _parse_afx_html(html_source, tickers)
-        fetch_debug = f"📂 Source: {html_origin}\n" + fetch_debug
-    else:
-        with st.spinner("📡 Trying live fetch from afx.kwayisi.org..."):
-            try:
-                live_prices, fetch_debug = fetch_live_prices(tickers)
-            except Exception as ex:
-                fetch_debug = f"Exception: {ex}"
-
-    eq = inject_live_prices(eq, live_prices)
-
-    # ── Price source summary + manual override ────────────────────────────────
+    live    = get_live_prices(tickers)
+    eq      = inject_live_prices(eq, live)
     n_live  = sum(1 for e in eq if e["live_price"] is not None)
-    n_stmt  = len(eq) - n_live
-
-    source_counts = {}
-    for e in eq:
-        if e["live_price"] is not None:
-            src = e["price_source"].strip()
-            source_counts[src] = source_counts.get(src, 0) + 1
-    src_parts  = [f"**{v}** via {k}" for k, v in source_counts.items()]
-    src_detail = " · ".join(src_parts) if src_parts else ""
 
     if n_live == len(eq):
-        st.success(f"📡 All {n_live} live prices fetched · {src_detail} · *(refreshes every 5 min)*")
-    elif n_live > 0:
-        st.warning(f"📡 **{n_live}/{len(eq)} live prices** fetched · {src_detail}"
-                   + (f" · {n_stmt} using statement price" if n_stmt else ""))
+        st.success(f"📡 All {n_live} live prices loaded from GSE")
+    elif n_live:
+        st.warning(f"📡 {n_live}/{len(eq)} live prices · {len(eq)-n_live} using statement price")
     else:
-        st.error("⚠️ Live price fetch failed — showing statement prices.")
+        st.info("📋 Showing statement prices — update `gse_html_b64` in Secrets for live data")
 
-    # ── Manual price override (always available, collapsed by default) ────────
-    with st.expander(
-        "✏️ Enter prices manually" if n_live == 0 else "✏️ Override prices manually",
-        expanded=(n_live == 0),
-    ):
-        if n_live == 0:
-            st.info(
-                "Auto-fetch couldn't reach afx.kwayisi.org — likely a network/firewall issue. "
-                "Visit [afx.kwayisi.org/gse](https://afx.kwayisi.org/gse/) and enter "
-                "today's prices below, then click **Apply**."
-            )
-        else:
-            st.caption("Override any auto-fetched price with a value you enter manually.")
-
-        override_cols = st.columns(5)
-        manual_prices = {}
+    # Manual override
+    with st.expander("✏️ Override prices manually", expanded=False):
+        cols = st.columns(5)
+        overrides = {}
         for i, e in enumerate(eq):
-            col = override_cols[i % 5]
-            default = e["live_price"] if e["live_price"] else e["statement_price"]
-            val = col.number_input(
-                e["ticker"],
-                min_value=0.0,
-                value=float(default),
-                step=0.01,
-                format="%.4f",
-                key=f"manual_{e['ticker']}",
-            )
-            if val and val > 0:
-                manual_prices[e["ticker"]] = val
-
-        if st.button("✅ Apply manual prices", type="primary"):
+            default = float(e["live_price"] or e["statement_price"])
+            val = cols[i % 5].number_input(e["ticker"], min_value=0.0, value=default,
+                                           step=0.01, format="%.4f", key=f"ov_{e['ticker']}")
+            if val > 0:
+                overrides[e["ticker"]] = val
+        if st.button("✅ Apply", type="primary"):
             st.cache_data.clear()
-            override_live = {
-                t: {"price": p, "source": "Manual entry", "change_pct": 0.0, "change_abs": 0.0}
-                for t, p in manual_prices.items()
-            }
-            eq = inject_live_prices(eq, override_live)
+            eq = inject_live_prices(
+                eq, {t: {"price":p,"change_pct":0,"change_abs":0} for t,p in overrides.items()})
             n_live = len(eq)
-            st.success(f"Applied manual prices for {len(override_live)} stocks.")
+            st.success("Applied.")
 
-    # ── Diagnostics (collapsed) ───────────────────────────────────────────────
-    with st.expander("🔍 Fetch diagnostics", expanded=False):
-        st.code(fetch_debug or "No debug info.", language="text")
-
-    # ── Compute KPIs ──────────────────────────────────────────────────────────
-    total_value    = sum(e["market_value"] for e in eq) + ps.get("Cash", {}).get("value", 0) + \
-                     ps.get("Funds", {}).get("value", 0)
-    equities_val   = sum(e["market_value"] for e in eq)
-    total_cost     = sum(e["total_cost"] for e in eq)
-    total_gain     = sum(e["gain_loss"] for e in eq)
-    gain_pct       = (total_gain / total_cost * 100) if total_cost else 0
-    total_credits  = sum(t["credit"] for t in txs)
-    total_debits   = sum(t["debit"]  for t in txs)
-    net_invested   = total_credits - total_debits
-    overall_return = ((total_value - net_invested) / net_invested * 100) if net_invested else 0
-    cash_val       = ps.get("Cash", {}).get("value", 0)
-    cash_alloc     = ps.get("Cash", {}).get("alloc", 0)
-    equities_alloc = ps.get("Equities", {}).get("alloc", 0)
-    winners        = sum(1 for e in eq if e["gain_pct"] >= 0)
-    best           = max(eq, key=lambda e: e["gain_pct"])
-    worst          = min(eq, key=lambda e: e["gain_pct"])
-    biggest        = max(eq, key=lambda e: e["market_value"])
-
-    active_month = "N/A"
+    # ── Derived metrics ───────────────────────────────────────────────────────
+    equities_val  = sum(e["market_value"] for e in eq)
+    total_cost    = sum(e["total_cost"]   for e in eq)
+    total_gain    = sum(e["gain_loss"]    for e in eq)
+    gain_pct      = (total_gain / total_cost * 100) if total_cost else 0
+    cash_val      = ps.get("Cash",  {}).get("value", 0)
+    funds_val     = ps.get("Funds", {}).get("value", 0)
+    total_value   = equities_val + cash_val + funds_val
+    total_credits = sum(t["credit"] for t in txs)
+    total_debits  = sum(t["debit"]  for t in txs)
+    net_invested  = total_credits - total_debits
+    overall_roi   = ((total_value - net_invested) / net_invested * 100) if net_invested else 0
+    winners       = sum(1 for e in eq if e["gain_pct"] >= 0)
+    best          = max(eq, key=lambda e: e["gain_pct"])
+    worst         = min(eq, key=lambda e: e["gain_pct"])
+    biggest       = max(eq, key=lambda e: e["market_value"])
+    active_month  = "N/A"
     if txs:
-        tx_df = pd.DataFrame(txs)
-        tx_df["month"] = tx_df["date"].dt.to_period("M")
-        active_month = str(tx_df["month"].value_counts().idxmax())
+        _tdf         = pd.DataFrame(txs)
+        _tdf["month"] = _tdf["date"].dt.to_period("M")
+        active_month  = str(_tdf["month"].value_counts().idxmax())
 
-    # ── Client header bar ─────────────────────────────────────────────────────
+    # ── Client bar ────────────────────────────────────────────────────────────
     st.markdown(f"""
-    <div style="background:#1a1d2e;border-radius:12px;padding:14px 20px;
+    <div style="background:{CARD};border-radius:12px;padding:14px 20px;
                 display:flex;justify-content:space-between;align-items:center;
                 margin-bottom:20px;flex-wrap:wrap;gap:10px;">
-      <div>
-        <span style="color:#8892b0;font-size:.8rem;">CLIENT</span><br>
-        <span style="font-size:1.1rem;font-weight:700;color:#e8eaf6;">{data['client_name']}</span>
-      </div>
-      <div>
-        <span style="color:#8892b0;font-size:.8rem;">ACCOUNT</span><br>
-        <span style="font-size:1rem;font-weight:600;color:#6c63ff;">{data['account_number']}</span>
-      </div>
-      <div>
-        <span style="color:#8892b0;font-size:.8rem;">REPORT DATE</span><br>
-        <span style="font-size:1rem;font-weight:600;color:#e8eaf6;">{data['report_date']}</span>
-      </div>
-      <div>
-        <span style="color:#8892b0;font-size:.8rem;">POSITIONS</span><br>
-        <span style="font-size:1rem;font-weight:600;color:#e8eaf6;">{len(eq)} stocks · {len(txs)} transactions</span>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+      <div><span style="color:{MUTED};font-size:.8rem;">CLIENT</span><br>
+           <span style="font-size:1.1rem;font-weight:700;color:{TEXT};">{data['client_name']}</span></div>
+      <div><span style="color:{MUTED};font-size:.8rem;">ACCOUNT</span><br>
+           <span style="font-size:1rem;font-weight:600;color:{PURPLE};">{data['account_number']}</span></div>
+      <div><span style="color:{MUTED};font-size:.8rem;">REPORT DATE</span><br>
+           <span style="font-size:1rem;font-weight:600;color:{TEXT};">{data['report_date']}</span></div>
+      <div><span style="color:{MUTED};font-size:.8rem;">POSITIONS</span><br>
+           <span style="font-size:1rem;font-weight:600;color:{TEXT};">
+           {len(eq)} stocks · {len(txs)} transactions</span></div>
+    </div>""", unsafe_allow_html=True)
 
-    # ── KPI Row 1 ─────────────────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">📊 Portfolio Overview</div>', unsafe_allow_html=True)
+    # ── KPIs ──────────────────────────────────────────────────────────────────
+    shdr("📊 Portfolio Overview")
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.markdown(kpi("Total Portfolio Value",
-                        f"GHS {total_value:,.2f}",
-                        f"As of {data['report_date']}", "blue"),
-                    unsafe_allow_html=True)
-    with c2:
-        gc = pos_neg_cls(total_gain)
-        st.markdown(kpi("Unrealised Gain / Loss",
-                        f"<span class='{gc}'>{'+'if total_gain>=0 else ''}GHS {total_gain:,.2f}</span>",
-                        f"<span class='{gc}'>{gain_pct:+.2f}%</span> on cost basis",
-                        "green" if total_gain >= 0 else "red"),
-                    unsafe_allow_html=True)
-    with c3:
-        st.markdown(kpi("Total Cost Basis",
-                        f"GHS {total_cost:,.2f}",
-                        f"{len(eq)} equity positions"),
-                    unsafe_allow_html=True)
-    with c4:
-        rc = pos_neg_cls(overall_return)
-        st.markdown(kpi("Overall ROI",
-                        f"<span class='{rc}'>{overall_return:+.2f}%</span>",
-                        f"Net invested: GHS {net_invested:,.2f}",
-                        "green" if overall_return >= 0 else "red"),
-                    unsafe_allow_html=True)
+    with c1: st.markdown(kpi("Total Portfolio Value", f"GHS {total_value:,.2f}",
+                             f"As of {data['report_date']}", "b"), unsafe_allow_html=True)
+    with c2: st.markdown(kpi("Unrealised Gain / Loss",
+                             f"<span class='{pn(total_gain)}'>{'+'if total_gain>=0 else ''}"
+                             f"GHS {total_gain:,.2f}</span>",
+                             f"<span class='{pn(gain_pct)}'>{gain_pct:+.2f}%</span> on cost basis",
+                             "g" if total_gain >= 0 else "r"), unsafe_allow_html=True)
+    with c3: st.markdown(kpi("Total Cost Basis", f"GHS {total_cost:,.2f}",
+                             f"{len(eq)} positions"), unsafe_allow_html=True)
+    with c4: st.markdown(kpi("Overall ROI",
+                             f"<span class='{pn(overall_roi)}'>{overall_roi:+.2f}%</span>",
+                             f"Net invested GHS {net_invested:,.2f}",
+                             "g" if overall_roi >= 0 else "r"), unsafe_allow_html=True)
 
     st.markdown("")
     c5, c6, c7, c8 = st.columns(4)
-    with c5:
-        st.markdown(kpi("Equities Value",
-                        f"GHS {equities_val:,.2f}",
-                        f"{equities_alloc:.1f}% of portfolio", ""),
-                    unsafe_allow_html=True)
-    with c6:
-        st.markdown(kpi("Cash Balance",
-                        f"GHS {cash_val:,.2f}",
-                        f"{cash_alloc:.1f}% of portfolio", "yellow"),
-                    unsafe_allow_html=True)
-    with c7:
-        st.markdown(kpi("Total Contributions",
-                        f"GHS {total_credits:,.2f}",
-                        f"{len(txs)} total transactions"),
-                    unsafe_allow_html=True)
-    with c8:
-        st.markdown(kpi("Total Withdrawals",
-                        f"GHS {total_debits:,.2f}",
-                        f"Net: GHS {net_invested:,.2f}", "red"),
-                    unsafe_allow_html=True)
-
+    with c5: st.markdown(kpi("Equities Value", f"GHS {equities_val:,.2f}",
+                             f"{ps.get('Equities',{}).get('alloc',0):.1f}% of portfolio"),
+                         unsafe_allow_html=True)
+    with c6: st.markdown(kpi("Cash Balance", f"GHS {cash_val:,.2f}",
+                             f"{ps.get('Cash',{}).get('alloc',0):.1f}% of portfolio", "y"),
+                         unsafe_allow_html=True)
+    with c7: st.markdown(kpi("Total Contributions", f"GHS {total_credits:,.2f}",
+                             f"{len(txs)} transactions"), unsafe_allow_html=True)
+    with c8: st.markdown(kpi("Total Withdrawals", f"GHS {total_debits:,.2f}",
+                             f"Net GHS {net_invested:,.2f}", "r"), unsafe_allow_html=True)
     st.markdown("---")
 
     # ── Quick Insights ────────────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">💡 Quick Insights</div>', unsafe_allow_html=True)
+    shdr("💡 Quick Insights")
     i1, i2, i3, i4, i5, i6 = st.columns(6)
-    with i1:
-        st.markdown(f"""<div class="insight-box">
-          <div class="insight-icon">🏆</div>
-          <div class="insight-lbl">Best Performer</div>
-          <div class="insight-val pos">{best['ticker']} ({best['gain_pct']:+.1f}%)</div>
-        </div>""", unsafe_allow_html=True)
-    with i2:
-        st.markdown(f"""<div class="insight-box">
-          <div class="insight-icon">📉</div>
-          <div class="insight-lbl">Worst Performer</div>
-          <div class="insight-val neg">{worst['ticker']} ({worst['gain_pct']:+.1f}%)</div>
-        </div>""", unsafe_allow_html=True)
-    with i3:
-        st.markdown(f"""<div class="insight-box">
-          <div class="insight-icon">💎</div>
-          <div class="insight-lbl">Largest Position</div>
-          <div class="insight-val">{biggest['ticker']} (GHS {biggest['market_value']:,.0f})</div>
-        </div>""", unsafe_allow_html=True)
-    with i4:
-        st.markdown(f"""<div class="insight-box">
-          <div class="insight-icon">⚡</div>
-          <div class="insight-lbl">Most Active Month</div>
-          <div class="insight-val">{active_month}</div>
-        </div>""", unsafe_allow_html=True)
-    with i5:
-        st.markdown(f"""<div class="insight-box">
-          <div class="insight-icon">✅</div>
-          <div class="insight-lbl">Winning Positions</div>
-          <div class="insight-val pos">{winners} / {len(eq)} stocks</div>
-        </div>""", unsafe_allow_html=True)
-    with i6:
-        st.markdown(f"""<div class="insight-box">
-          <div class="insight-icon">📡</div>
-          <div class="insight-lbl">Live Prices</div>
-          <div class="insight-val">{n_live} / {len(eq)} fetched</div>
-        </div>""", unsafe_allow_html=True)
+    with i1: st.markdown(insight("🏆","Best Performer",  f"{best['ticker']} ({best['gain_pct']:+.1f}%)", "pos"), unsafe_allow_html=True)
+    with i2: st.markdown(insight("📉","Worst Performer", f"{worst['ticker']} ({worst['gain_pct']:+.1f}%)", "neg"), unsafe_allow_html=True)
+    with i3: st.markdown(insight("💎","Largest Position",f"{biggest['ticker']} · GHS {biggest['market_value']:,.0f}"), unsafe_allow_html=True)
+    with i4: st.markdown(insight("⚡","Most Active Month", active_month), unsafe_allow_html=True)
+    with i5: st.markdown(insight("✅","Winning Positions", f"{winners} / {len(eq)}", "pos"), unsafe_allow_html=True)
+    with i6: st.markdown(insight("📡","Live Prices", f"{n_live} / {len(eq)}"), unsafe_allow_html=True)
+
+    # ── Today's Movers ────────────────────────────────────────────────────────
+    movers = sorted([e for e in eq if e.get("change_pct") is not None],
+                    key=lambda e: abs(e["change_pct"]), reverse=True)
+    if movers:
+        st.markdown("---")
+        shdr("🚀 Today's Movers")
+        mcols = st.columns(min(len(movers), 5))
+        for col, e in zip(mcols, movers[:5]):
+            chg  = e["change_pct"] or 0
+            chga = e["change_abs"] or 0
+            cls  = "pos" if chg >= 0 else "neg"
+            col.markdown(
+                f"<div class='ibox'>"
+                f"<div class='ibox-lbl'>{e['ticker']}</div>"
+                f"<div class='ibox-val' style='font-size:1.3rem;'>GHS {e['live_price']:.2f}</div>"
+                f"<div class='ibox-val {cls}' style='font-size:.9rem;'>"
+                f"{'▲' if chg>=0 else '▼'} {abs(chg):.2f}% ({chga:+.4f})</div>"
+                f"</div>", unsafe_allow_html=True)
 
     st.markdown("---")
 
-    # ── Charts: Gain/Loss + Allocation ───────────────────────────────────────
-    st.markdown('<div class="section-hdr">📈 Performance Analysis</div>', unsafe_allow_html=True)
-    col_left, col_right = st.columns([2, 1])
-    with col_left:
-        st.plotly_chart(chart_gain_loss(eq), use_container_width=True)
-    with col_right:
-        st.plotly_chart(chart_allocation(ps), use_container_width=True)
+    # ── Performance Charts ────────────────────────────────────────────────────
+    shdr("📈 Performance Analysis")
+    cl, cr = st.columns([3, 2])
+    with cl: st.plotly_chart(chart_gain_loss(eq), use_container_width=True)
+    with cr: st.plotly_chart(chart_stock_weight_bar(eq), use_container_width=True)
 
-    # ── Charts: Market vs Cost + Stock Weight ─────────────────────────────────
-    col_left, col_right = st.columns([3, 2])
-    with col_left:
-        st.plotly_chart(chart_market_vs_cost(eq), use_container_width=True)
-    with col_right:
-        st.plotly_chart(chart_stock_weight(eq), use_container_width=True)
+    cl, cr = st.columns([3, 2])
+    with cl: st.plotly_chart(chart_market_vs_cost(eq), use_container_width=True)
+    with cr: st.plotly_chart(chart_allocation_treemap(ps), use_container_width=True)
 
-    # ── Live vs Statement price chart ────────────────────────────────────────
-    price_chart = chart_price_comparison(eq)
-    if price_chart:
-        st.plotly_chart(price_chart, use_container_width=True)
-    else:
-        st.info("📡 Live price comparison unavailable — no live prices fetched. Check your internet connection.")
+    st.plotly_chart(chart_pl_waterfall(eq), use_container_width=True)
+
+    pc = chart_price_comparison(eq)
+    if pc:
+        st.plotly_chart(pc, use_container_width=True)
 
     st.markdown("---")
 
-    # ── Cash flow charts ──────────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">💸 Cash Flow & History</div>', unsafe_allow_html=True)
+    # ── Break-even ────────────────────────────────────────────────────────────
+    be = chart_breakeven(eq)
+    if be:
+        shdr("🎯 Break-even Analysis")
+        st.plotly_chart(be, use_container_width=True)
+        st.markdown("---")
+
+    # ── Concentration Risk ────────────────────────────────────────────────────
+    shdr("⚖️ Concentration Risk")
+    conc_fig, hhi, risk, risk_color = chart_concentration(eq)
+    st.plotly_chart(conc_fig, use_container_width=True)
+    st.markdown(
+        f"<div style='text-align:center;color:{MUTED};font-size:.85rem;margin-top:-10px;'>"
+        f"HHI: <b style='color:{risk_color}'>{hhi}</b> · "
+        f"Concentration: <b style='color:{risk_color}'>{risk}</b> · "
+        f"(Low &lt;1500 · Moderate 1500–2500 · High &gt;2500)"
+        f"</div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    # ── What-If Simulator ─────────────────────────────────────────────────────
+    shdr("🔮 What-If Scenario Simulator")
+    st.caption("Adjust sliders to model price changes and see the impact on your portfolio.")
+
+    rows_of_5 = [eq[i:i+5] for i in range(0, len(eq), 5)]
+    sim_mult  = {}
+    for row in rows_of_5:
+        cols = st.columns(len(row))
+        for col, e in zip(cols, row):
+            chg = col.slider(e["ticker"], min_value=-50, max_value=100, value=0,
+                             step=1, format="%d%%", key=f"sim_{e['ticker']}")
+            sim_mult[e["ticker"]] = 1 + chg / 100
+
+    sim_mv    = sum(e["market_value"] * sim_mult.get(e["ticker"], 1) for e in eq)
+    sim_total = sim_mv + cash_val + funds_val
+    sim_gain  = sum((e["market_value"] * sim_mult.get(e["ticker"],1)) - e["total_cost"] for e in eq)
+    sim_delta = sim_total - total_value
+    sim_roi   = ((sim_total - net_invested) / net_invested * 100) if net_invested else 0
+
+    sc1, sc2, sc3 = st.columns(3)
+    with sc1: st.markdown(kpi("Simulated Portfolio Value", f"GHS {sim_total:,.2f}",
+                              f"{'+'if sim_delta>=0 else ''}GHS {sim_delta:,.2f} vs current",
+                              "g" if sim_delta >= 0 else "r"), unsafe_allow_html=True)
+    with sc2: st.markdown(kpi("Simulated Equity G/L",
+                              f"<span class='{pn(sim_gain)}'>{'+'if sim_gain>=0 else ''}"
+                              f"GHS {sim_gain:,.2f}</span>",
+                              f"{(sim_gain/total_cost*100):+.2f}% on cost",
+                              "g" if sim_gain >= 0 else "r"), unsafe_allow_html=True)
+    with sc3: st.markdown(kpi("Simulated ROI",
+                              f"<span class='{pn(sim_roi)}'>{sim_roi:+.2f}%</span>",
+                              f"vs current {overall_roi:+.2f}%",
+                              "g" if sim_roi >= 0 else "r"), unsafe_allow_html=True)
+
+    sim_df = pd.DataFrame([{
+        "ticker":    e["ticker"],
+        "current":   e["market_value"],
+        "simulated": e["market_value"] * sim_mult.get(e["ticker"], 1),
+    } for e in eq]).sort_values("simulated", ascending=False)
+    fig_sim = go.Figure()
+    fig_sim.add_trace(go.Bar(name="Current",   x=sim_df["ticker"], y=sim_df["current"],
+                             marker_color=PURPLE, opacity=0.7))
+    fig_sim.add_trace(go.Bar(name="Simulated", x=sim_df["ticker"], y=sim_df["simulated"],
+                             marker_color=GREEN, opacity=0.85))
+    fig_sim.update_layout(title="Current vs Simulated Market Value", yaxis_title="GHS",
+                          barmode="group", legend=dict(bgcolor=CARD), **T, height=320)
+    st.plotly_chart(fig_sim, use_container_width=True)
+    st.markdown("---")
+
+    # ── Cash Flow ─────────────────────────────────────────────────────────────
+    shdr("💸 Cash Flow & History")
     cf = chart_cashflow(txs)
     if cf:
         st.plotly_chart(cf, use_container_width=True)
 
-    col_left, col_right = st.columns([3, 2])
-    with col_left:
+    cl, cr = st.columns([3, 2])
+    with cl:
         cumul = chart_cumulative(txs, total_value)
         if cumul:
             st.plotly_chart(cumul, use_container_width=True)
-    with col_right:
-        tx_type = chart_tx_type_breakdown(txs)
-        if tx_type:
-            st.plotly_chart(tx_type, use_container_width=True)
+    with cr:
+        tx_df2 = pd.DataFrame(txs)
+        if not tx_df2.empty:
+            tx_df2["amount"] = tx_df2["credit"] + tx_df2["debit"]
+            grp = tx_df2.groupby("type")["amount"].sum().reset_index()
+            cmap = {"Buy":BLUE,"Sell":AMBER,"Credit":GREEN,"Withdrawal":RED,"Other":MUTED}
+            fig_tt = go.Figure(go.Bar(
+                x=grp["type"], y=grp["amount"],
+                marker_color=[cmap.get(t, MUTED) for t in grp["type"]],
+                text=[f"GHS {v:,.0f}" for v in grp["amount"]], textposition="outside",
+                hovertemplate="%{x}: GHS %{y:,.2f}<extra></extra>",
+            ))
+            fig_tt.update_layout(title="Volume by Transaction Type",
+                                 yaxis_title="GHS", **T, height=320)
+            st.plotly_chart(fig_tt, use_container_width=True)
 
     st.markdown("---")
 
     # ── Equity Positions Table ────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">📋 Equity Positions Detail</div>', unsafe_allow_html=True)
-
-    rows = []
+    shdr("📋 Equity Positions")
+    pos_rows = []
     for e in sorted(eq, key=lambda x: x["market_value"], reverse=True):
-        live_str = f"GHS {e['live_price']:.4f}" if e["live_price"] else "—"
-        rows.append({
-            "Ticker":         e["ticker"],
-            "Qty":            f"{e['qty']:,.0f}",
-            "Avg Cost (GHS)": f"{e['avg_cost']:.4f}",
-            "Stmt Price":     f"{e['statement_price']:.4f}",
-            "Live Price":     live_str,
-            "Price Source":   e["price_source"],
-            "Daily Chg%":     f"{e.get('price_change', 0):+.2f}%" if e.get("live_price") else "—",
-            "Daily Chg GHS":  f"{e.get('price_change_abs', 0):+.4f}" if e.get("live_price") else "—",
-            "Cost Basis":     f"GHS {e['total_cost']:,.2f}",
-            "Market Value":   f"GHS {e['market_value']:,.2f}",
-            "Gain/Loss GHS":  f"{'+'if e['gain_loss']>=0 else ''}{e['gain_loss']:,.2f}",
-            "Return %":       f"{e['gain_pct']:+.1f}%",
+        pos_rows.append({
+            "Ticker":       e["ticker"],
+            "Qty":          f"{e['qty']:,.0f}",
+            "Avg Cost":     f"{e['avg_cost']:.4f}",
+            "Stmt Price":   f"{e['statement_price']:.4f}",
+            "Live Price":   f"{e['live_price']:.4f}" if e["live_price"] else "—",
+            "Today Δ%":     f"{e['change_pct']:+.2f}%" if e.get("change_pct") is not None else "—",
+            "Today ΔGHS":   f"{e['change_abs']:+.4f}" if e.get("change_abs") is not None else "—",
+            "Cost Basis":   f"GHS {e['total_cost']:,.2f}",
+            "Market Value": f"GHS {e['market_value']:,.2f}",
+            "Gain/Loss":    f"{'+'if e['gain_loss']>=0 else ''}GHS {e['gain_loss']:,.2f}",
+            "Return %":     f"{e['gain_pct']:+.1f}%",
+            "Break-even":   "✅ In profit" if e["gain_pct"] >= 0 else f"Need GHS {e['avg_cost']:.4f}",
         })
 
-    df_display = pd.DataFrame(rows)
+    df_pos = pd.DataFrame(pos_rows)
 
-    def _style_row(row):
-        styles = [""] * len(row)
-        gl = row["Gain/Loss GHS"]
-        pct_col = list(row.index).index("Return %")
-        gl_col  = list(row.index).index("Gain/Loss GHS")
-        if "+" in gl or (gl.replace(",","").replace(".","").replace("-","").isdigit() and float(gl.replace(",","")) >= 0):
-            styles[gl_col]  = "color: #00d68f; font-weight: 700"
-            styles[pct_col] = "color: #00d68f; font-weight: 700"
-        else:
-            styles[gl_col]  = "color: #ff3d71; font-weight: 700"
-            styles[pct_col] = "color: #ff3d71; font-weight: 700"
-        return styles
+    def _style(row):
+        s = [""] * len(row)
+        ig = list(row.index).index("Gain/Loss")
+        ir = list(row.index).index("Return %")
+        c  = f"color:{GREEN};font-weight:700" if "+" in row["Gain/Loss"] else f"color:{RED};font-weight:700"
+        s[ig] = s[ir] = c
+        return s
 
-    st.dataframe(
-        df_display.style.apply(_style_row, axis=1),
-        use_container_width=True, hide_index=True,
-    )
-
+    st.dataframe(df_pos.style.apply(_style, axis=1),
+                 use_container_width=True, hide_index=True)
     st.markdown("---")
 
     # ── Transaction History ───────────────────────────────────────────────────
-    st.markdown('<div class="section-hdr">🕒 Transaction History</div>', unsafe_allow_html=True)
-
+    shdr("🕒 Transaction History")
     tx_df = pd.DataFrame(txs).sort_values("date", ascending=False)
-    tx_df["Type"] = tx_df["description"].apply(lambda d:
-        "🔵 Buy"        if re.search(r"\bBought\b", d, re.I) else
-        "🟡 Sell"       if re.search(r"\bSold\b",   d, re.I) else
-        "🟢 Credit"     if re.search(r"Contribution|Funding", d, re.I) else
-        "🔴 Withdrawal" if re.search(r"Withdrawal|Transfer.*Payout", d, re.I) else
-        "⚪ Other"
-    )
+    emoji = {"Buy":"🔵","Sell":"🟡","Credit":"🟢","Withdrawal":"🔴","Other":"⚪"}
+    tx_df["Type"] = tx_df["type"].map(lambda t: f"{emoji.get(t,'⚪')} {t}")
 
-    col_filter, col_search = st.columns([2, 3])
-    with col_filter:
-        tx_type_filter = st.multiselect(
-            "Filter by type",
-            options=["🔵 Buy", "🟡 Sell", "🟢 Credit", "🔴 Withdrawal", "⚪ Other"],
-            default=["🔵 Buy", "🟡 Sell", "🟢 Credit", "🔴 Withdrawal", "⚪ Other"],
-            label_visibility="collapsed",
-        )
-    with col_search:
-        search = st.text_input("Search transactions", placeholder="Search description...",
+    cf1, cf2 = st.columns([2, 3])
+    with cf1:
+        filt = st.multiselect("Filter", options=list(tx_df["Type"].unique()),
+                               default=list(tx_df["Type"].unique()),
                                label_visibility="collapsed")
+    with cf2:
+        srch = st.text_input("Search", placeholder="Search description...",
+                             label_visibility="collapsed")
 
-    filtered = tx_df[tx_df["Type"].isin(tx_type_filter)]
-    if search:
-        filtered = filtered[filtered["description"].str.contains(search, case=False, na=False)]
+    view = tx_df[tx_df["Type"].isin(filt)]
+    if srch:
+        view = view[view["description"].str.contains(srch, case=False, na=False)]
 
-    display_cols = {
-        "date_str": "Date", "Type": "Type",
-        "description": "Description", "credit": "Credit (GHS)", "debit": "Debit (GHS)"
-    }
-    tx_show = filtered[list(display_cols.keys())].rename(columns=display_cols)
-    tx_show["Credit (GHS)"] = tx_show["Credit (GHS)"].apply(
-        lambda v: f"+{v:,.2f}" if v > 0 else "—")
-    tx_show["Debit (GHS)"] = tx_show["Debit (GHS)"].apply(
-        lambda v: f"-{v:,.2f}" if v > 0 else "—")
-    tx_show["Description"] = tx_show["Description"].str[:100]
+    view_show = view[["date_str","Type","description","credit","debit"]].rename(columns={
+        "date_str":"Date","description":"Description",
+        "credit":"Credit (GHS)","debit":"Debit (GHS)"})
+    view_show["Credit (GHS)"] = view_show["Credit (GHS)"].apply(lambda v: f"+{v:,.2f}" if v>0 else "—")
+    view_show["Debit (GHS)"]  = view_show["Debit (GHS)"].apply( lambda v: f"-{v:,.2f}" if v>0 else "—")
+    view_show["Description"]  = view_show["Description"].str[:100]
+    st.dataframe(view_show, use_container_width=True, hide_index=True, height=400)
 
-    st.dataframe(tx_show, use_container_width=True, hide_index=True, height=420)
-
-    # ── Footer ────────────────────────────────────────────────────────────────
-    st.markdown("""
-    <div style="text-align:center;color:#8892b0;font-size:.8rem;padding:24px 0 8px;">
-      IC Portfolio Analyser · Live prices via afx.kwayisi.org (dev.kwayisi.org API) ·
+    # Footer
+    st.markdown(f"""
+    <div style="text-align:center;color:{MUTED};font-size:.8rem;padding:24px 0 8px;">
+      IC Portfolio Analyser · Prices via afx.kwayisi.org ·
       For informational purposes only · Past performance is not indicative of future results
-    </div>
-    """, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
