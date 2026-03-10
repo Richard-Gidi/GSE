@@ -533,9 +533,9 @@ def chart_concentration(eq):
             bar=dict(color=risk_color),
             bgcolor=CARD,
             steps=[
-                dict(range=[0,    1500], color="#00d68f22"),
-                dict(range=[1500, 2500], color="#ffaa0022"),
-                dict(range=[2500,10000], color="#ff3d7122"),
+                dict(range=[0,    1500], color="rgba(0,214,143,0.13)"),
+                dict(range=[1500, 2500], color="rgba(255,170,0,0.13)"),
+                dict(range=[2500,10000], color="rgba(255,61,113,0.13)"),
             ],
         ),
         title=dict(text=f"Risk: <b>{risk}</b>", font=dict(color=risk_color)),
