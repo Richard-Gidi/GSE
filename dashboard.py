@@ -2,7 +2,7 @@
 IC Securities Portfolio Analyser — Streamlit Dashboard
 =======================================================
 Install:  pip install streamlit plotly pdfplumber pandas requests beautifulsoup4 lxml
-Run:      streamlit run akwasi.py
+Run:      streamlit run streamlit_dashboard.py
 """
 
 import io, re, warnings
@@ -130,35 +130,26 @@ STOCK_COLORS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIVE PRICE FETCHER  — afx.kwayisi.org / dev.kwayisi.org
-# Tries HTTPS then HTTP, picks up system proxy, 3 endpoint variants.
+# LIVE PRICE FETCHER  — afx.kwayisi.org  (fast, non-blocking)
+# Single endpoint, 5 s hard timeout, runs in a background thread so the UI
+# never freezes. Falls back silently to statement prices on any error.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_ENDPOINTS = [
-    "https://dev.kwayisi.org/apis/gse/live",
-    "http://dev.kwayisi.org/apis/gse/live",   # HTTP fallback if HTTPS blocked
-]
-_TICK_TMPL  = "https://dev.kwayisi.org/apis/gse/{}"
-_AFX_URLS   = [
-    "https://afx.kwayisi.org/gse/",
-    "http://afx.kwayisi.org/gse/",
-]
+_API_URL = "https://dev.kwayisi.org/apis/gse/live"
+_AFX_URL = "https://afx.kwayisi.org/gse/"
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
+_FETCH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept": "application/json, text/html, */*",
 }
+_TIMEOUT = 5   # hard cap — never wait longer than this per request
 
 
 def _normalize(s: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", s.upper())
 
 
-def _to_float(val) -> float | None:
+def _to_float(val):
     try:
         if pd.isna(val):
             return None
@@ -168,149 +159,124 @@ def _to_float(val) -> float | None:
         return None
 
 
-def _make_session():
-    import requests
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry
-    s = requests.Session()
-    s.headers.update(_HEADERS)
-    s.trust_env = True   # picks up HTTP_PROXY / HTTPS_PROXY / system proxy
-    retry = Retry(total=2, backoff_factor=0.5, status_forcelist=[429,500,502,503,504])
-    s.mount("https://", HTTPAdapter(max_retries=retry))
-    s.mount("http://",  HTTPAdapter(max_retries=retry))
-    return s
-
-
-def _get_json(session, urls: list, timeout=20, debug: list = None) -> list | None:
-    """Try each URL in turn; return parsed JSON list on first success."""
-    import urllib3
+def _fetch_worker(tickers: tuple, out: dict) -> None:
+    """Run in a thread. Populates out['results'] and out['debug']."""
+    import requests, urllib3
     urllib3.disable_warnings()
-    for url in urls:
-        for verify in (True, False):
-            try:
-                r = session.get(url, timeout=timeout, verify=verify)
-                if r.status_code == 200:
-                    data = r.json()
-                    if debug is not None:
-                        debug.append(f"  ✅ {url} → {len(data)} records (verify={verify})")
-                    return data if isinstance(data, list) else None
-                if debug is not None:
-                    debug.append(f"  ✗ {url} → HTTP {r.status_code}")
-            except Exception as e:
-                if debug is not None:
-                    debug.append(f"  ✗ {url} (verify={verify}) → {type(e).__name__}: {str(e)[:80]}")
-    return None
 
-
-def _parse_rec(rec, norm_to_orig, wanted_norm):
-    sym_norm = _normalize(str(rec.get("name", rec.get("symbol", rec.get("ticker", "")))))
-    if sym_norm not in wanted_norm:
-        return None
-    price   = _to_float(rec.get("price"))
-    if not price or price <= 0:
-        return None
-    chg_abs = _to_float(rec.get("change")) or 0.0
-    prev    = price - chg_abs
-    chg_pct = (chg_abs / prev * 100) if prev else 0.0
-    orig    = norm_to_orig[sym_norm]
-    return orig, {"price": price, "source": "afx.kwayisi.org ✓",
-                  "change_pct": round(chg_pct, 2), "change_abs": round(chg_abs, 4)}
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def fetch_live_prices(tickers: tuple) -> tuple[dict, str]:
-    """Returns (prices_dict, debug_log)."""
     norm_to_orig = {_normalize(t): t for t in tickers}
     wanted_norm  = set(norm_to_orig.keys())
     results, debug = {}, []
 
-    session = _make_session()
+    def _get(url):
+        for verify in (True, False):
+            try:
+                r = requests.get(url, headers=_FETCH_HEADERS,
+                                 timeout=_TIMEOUT, verify=verify)
+                if r.status_code == 200:
+                    debug.append(f"✅ {url} (verify={verify})")
+                    return r
+                debug.append(f"✗ {url} → HTTP {r.status_code}")
+            except Exception as e:
+                debug.append(f"✗ {url} (verify={verify}): {type(e).__name__}: {str(e)[:60]}")
+        return None
 
-    # ── 1. Bulk JSON ──────────────────────────────────────────────────────────
-    debug.append("── Bulk JSON API ──")
-    data = _get_json(session, _ENDPOINTS, debug=debug)
-    if data:
-        for rec in data:
-            hit = _parse_rec(rec, norm_to_orig, wanted_norm)
-            if hit:
-                orig, payload = hit
-                results[orig] = payload
-                debug.append(f"  ✓ {orig}: {payload['price']} ({payload['change_pct']:+.2f}%)")
+    # ── 1. JSON API (bulk) ────────────────────────────────────────────────────
+    r = _get(_API_URL)
+    if r:
+        try:
+            for rec in r.json():
+                sym = _normalize(str(rec.get("name", "")))
+                if sym not in wanted_norm:
+                    continue
+                price   = _to_float(rec.get("price"))
+                if not price or price <= 0:
+                    continue
+                chg_abs = _to_float(rec.get("change")) or 0.0
+                prev    = price - chg_abs
+                chg_pct = (chg_abs / prev * 100) if prev else 0.0
+                orig    = norm_to_orig[sym]
+                results[orig] = {
+                    "price":      price,
+                    "source":     "afx.kwayisi.org ✓",
+                    "change_pct": round(chg_pct, 2),
+                    "change_abs": round(chg_abs, 4),
+                }
+                debug.append(f"  ✓ {orig}: {price} ({chg_pct:+.2f}%)")
+        except Exception as e:
+            debug.append(f"JSON parse error: {e}")
 
-    # ── 2. Per-ticker JSON (for misses) ───────────────────────────────────────
-    missing = [t for t in tickers if t not in results]
-    if missing:
-        debug.append(f"\n── Per-ticker API for {missing} ──")
-        for t in missing:
-            url = _TICK_TMPL.format(t.lower())
-            data = _get_json(session, [url, url.replace("https://","http://")], debug=debug)
-            if data:
-                rec = data[0] if isinstance(data, list) else data
-                if "name" not in rec:
-                    rec["name"] = t
-                hit = _parse_rec(rec, norm_to_orig, wanted_norm)
-                if hit:
-                    results[hit[0]] = hit[1]
-
-    # ── 3. HTML scrape ────────────────────────────────────────────────────────
+    # ── 2. HTML scrape (only if API missed some tickers) ─────────────────────
     missing = [t for t in tickers if t not in results]
     if missing:
         missing_norm = {_normalize(t) for t in missing}
-        debug.append(f"\n── HTML scrape for {missing} ──")
-        import urllib3; urllib3.disable_warnings()
-        for url in _AFX_URLS:
-            for verify in (True, False):
-                try:
-                    r = session.get(url, timeout=20, verify=verify)
-                    if r.status_code != 200:
-                        continue
-                    debug.append(f"  ✅ {url} (verify={verify})")
-                    dfs = pd.read_html(io.StringIO(r.text), thousands=",")
-                    debug.append(f"  Tables: {len(dfs)}")
-                    for i, df in enumerate(dfs):
-                        df.columns = df.columns.astype(str).str.strip()
-                        sym_col = next((c for c in df.columns
-                                        if c.upper() in ("SYMBOL","TICKER","CODE","STOCK")), None)
-                        if sym_col is None:
-                            for c in df.columns:
-                                if df[c].astype(str).apply(_normalize).isin(missing_norm).sum() > 0:
-                                    sym_col = c; break
-                        if not sym_col: continue
-                        price_col = next((c for c in df.columns
-                                          if any(k in c.lower() for k in ("price","close","last"))), None)
-                        if price_col is None:
-                            for c in df.columns:
-                                if c == sym_col: continue
-                                v = [_to_float(x) for x in df[c].dropna().head(10)]
-                                if sum(1 for x in v if x and 0.001 < x < 99999) >= 3:
-                                    price_col = c; break
-                        if not price_col: continue
-                        pct_col = next((c for c in df.columns if "%" in c), None)
-                        chg_col = next((c for c in df.columns
-                                        if "change" in c.lower() and "%" not in c), None)
-                        debug.append(f"  Table {i}: sym={sym_col} price={price_col} pct={pct_col}")
-                        for _, row in df.iterrows():
-                            sn = _normalize(str(row.get(sym_col,"")))
-                            if sn not in missing_norm: continue
-                            p = _to_float(row.get(price_col))
-                            if not p or p <= 0: continue
-                            orig = norm_to_orig[sn]
-                            results[orig] = {
-                                "price": p, "source": "afx.kwayisi.org ✓",
-                                "change_pct": round(_to_float(row.get(pct_col)) or 0, 2),
-                                "change_abs": round(_to_float(row.get(chg_col)) or 0, 4),
-                            }
-                            debug.append(f"  ✓ {orig}: {p}")
-                    break
-                except Exception as e:
-                    debug.append(f"  ✗ {url} (verify={verify}): {type(e).__name__}: {str(e)[:80]}")
+        debug.append(f"HTML scrape for: {missing}")
+        r2 = _get(_AFX_URL)
+        if r2:
+            try:
+                dfs = pd.read_html(io.StringIO(r2.text), thousands=",")
+                for df in dfs:
+                    df.columns = df.columns.astype(str).str.strip()
+                    sym_col = next((c for c in df.columns
+                                    if c.upper() in ("SYMBOL","TICKER","CODE","STOCK")), None)
+                    if sym_col is None:
+                        for c in df.columns:
+                            if df[c].astype(str).apply(_normalize).isin(missing_norm).sum() > 0:
+                                sym_col = c; break
+                    if not sym_col: continue
+                    price_col = next((c for c in df.columns
+                                      if any(k in c.lower() for k in ("price","close","last"))), None)
+                    if price_col is None:
+                        for c in df.columns:
+                            if c == sym_col: continue
+                            v = [_to_float(x) for x in df[c].dropna().head(10)]
+                            if sum(1 for x in v if x and 0.001 < x < 99999) >= 3:
+                                price_col = c; break
+                    if not price_col: continue
+                    pct_col = next((c for c in df.columns if "%" in c), None)
+                    chg_col = next((c for c in df.columns
+                                    if "change" in c.lower() and "%" not in c), None)
+                    for _, row in df.iterrows():
+                        sn = _normalize(str(row.get(sym_col, "")))
+                        if sn not in missing_norm: continue
+                        p = _to_float(row.get(price_col))
+                        if not p or p <= 0: continue
+                        orig = norm_to_orig[sn]
+                        results[orig] = {
+                            "price":      p,
+                            "source":     "afx.kwayisi.org ✓",
+                            "change_pct": round(_to_float(row.get(pct_col)) or 0, 2),
+                            "change_abs": round(_to_float(row.get(chg_col)) or 0, 4),
+                        }
+                        debug.append(f"  ✓ {orig} (HTML): {p}")
+            except Exception as e:
+                debug.append(f"HTML parse error: {e}")
 
-    session.close()
     still = [t for t in tickers if t not in results]
     if still:
-        debug.append(f"\n⚠ No live price for: {still}")
-    debug.append(f"\nMatched: {len(results)}/{len(tickers)}")
-    return results, "\n".join(debug)
+        debug.append(f"⚠ No price for: {still}")
+    debug.append(f"Matched: {len(results)}/{len(tickers)}")
+
+    out["results"] = results
+    out["debug"]   = "\n".join(debug)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_live_prices(tickers: tuple) -> tuple[dict, str]:
+    """
+    Fetch prices in a background thread with a hard 12 s total wall-clock cap.
+    Returns (prices_dict, debug_log) — never blocks for more than 12 s.
+    """
+    import threading
+
+    out = {"results": {}, "debug": "Thread did not complete in time."}
+    t   = threading.Thread(target=_fetch_worker, args=(tickers, out), daemon=True)
+    t.start()
+    t.join(timeout=12)   # ← absolute ceiling: never more than 12 s total
+    return out["results"], out["debug"]
+
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -734,7 +700,7 @@ def main():
         st.success(f"📡 All {n_live} live prices fetched · {src_detail} · *(refreshes every 5 min)*")
     elif n_live > 0:
         st.warning(f"📡 **{n_live}/{len(eq)} live prices** fetched · {src_detail}"
-                    + (f" · {n_stmt} using statement price" if n_stmt else ""))
+                   + (f" · {n_stmt} using statement price" if n_stmt else ""))
     else:
         st.error("⚠️ Live price fetch failed — showing statement prices.")
 
@@ -756,7 +722,7 @@ def main():
         manual_prices = {}
         for i, e in enumerate(eq):
             col = override_cols[i % 5]
-            default = e["live_price"] if e["live_price"] else e["price"]
+            default = e["live_price"] if e["live_price"] else e["statement_price"]
             val = col.number_input(
                 e["ticker"],
                 min_value=0.0,
