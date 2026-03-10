@@ -497,13 +497,16 @@ def chart_breakeven(eq):
         text=[f"+{v:.1f}%" for v in pct_needed], textposition="top center",
         hovertemplate="%{x}: needs %{y:.1f}% rally<extra></extra>",
     ))
-    fig.update_layout(
-        title="Break-even Analysis — Losing Positions",
-        yaxis=dict(title="Price (GHS)", gridcolor=BORDER),
-        yaxis2=dict(title="% Rally Needed", overlaying="y", side="right",
-                    showgrid=False, color=AMBER),
-        barmode="group", legend=dict(bgcolor=CARD), **T, height=360,
-    )
+    fig.update_layout(**{
+        **T,
+        "title": "Break-even Analysis — Losing Positions",
+        "yaxis":  dict(title="Price (GHS)", gridcolor=BORDER),
+        "yaxis2": dict(title="% Rally Needed", overlaying="y", side="right",
+                       showgrid=False, color=AMBER),
+        "barmode": "group",
+        "legend":  dict(bgcolor=CARD),
+        "height":  360,
+    })
     return fig
 
 
