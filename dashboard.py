@@ -258,25 +258,47 @@ def _parse_afx_html(html: str, tickers: tuple) -> tuple[dict, str]:
 
 
 def _fetch_worker(tickers: tuple, out: dict) -> None:
-    """Background thread: fetch afx.kwayisi.org and parse."""
+    """Fetch afx.kwayisi.org using full browser headers"""
+
     import requests, urllib3
     urllib3.disable_warnings()
+
     debug = []
-    for verify in (True, False):
-        try:
-            r = requests.get(_AFX_URL, headers=_FETCH_HEADERS,
-                             timeout=_TIMEOUT, verify=verify)
-            if r.status_code == 200:
-                debug.append(f"✅ Fetched {_AFX_URL} (verify={verify})")
-                results, parse_debug = _parse_afx_html(r.text, tickers)
-                out["results"] = results
-                out["debug"]   = "\n".join(debug) + "\n" + parse_debug
-                return
-            debug.append(f"✗ HTTP {r.status_code} (verify={verify})")
-        except Exception as e:
-            debug.append(f"✗ (verify={verify}): {type(e).__name__}: {str(e)[:80]}")
-    out["results"] = {}
-    out["debug"]   = "\n".join(debug)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+    }
+
+    try:
+
+        r = requests.get(
+            _AFX_URL,
+            headers=headers,
+            timeout=10,
+            verify=False
+        )
+
+        debug.append(f"HTTP {r.status_code}")
+        debug.append(f"HTML size: {len(r.text)}")
+
+        if r.status_code != 200:
+            out["results"] = {}
+            out["debug"] = "\n".join(debug)
+            return
+
+        results, parse_debug = _parse_afx_html(r.text, tickers)
+
+        out["results"] = results
+        out["debug"] = "\n".join(debug) + "\n" + parse_debug
+
+    except Exception as e:
+
+        out["results"] = {}
+        out["debug"] = f"Fetch error: {str(e)}"
 
 
 @st.cache_data(ttl=300, show_spinner=False)
