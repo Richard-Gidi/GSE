@@ -1,7 +1,7 @@
 """
 IC Securities Portfolio Analyser — Streamlit Dashboard
 =======================================================
-Install:  pip install streamlit plotly pdfplumber pandas requests beautifulsoup4
+Install:  pip install streamlit plotly pdfplumber pandas requests beautifulsoup4 lxml
 Run:      streamlit run streamlit_dashboard.py
 """
 
@@ -130,45 +130,20 @@ STOCK_COLORS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LIVE PRICE FETCHER  — gsemarketwatch.com only, fully dynamic matching
-# No ticker map hardcoded. Strategy:
-#   1. Fetch the full market table from gsemarketwatch.com
-#   2. Auto-detect which column holds tickers and which holds prices
-#   3. Match against the user's tickers by normalised string comparison
-#   4. Graceful fallback to statement price if site is unreachable
+# LIVE PRICE FETCHER  — gsemarketwatch.com via pandas read_html
+# Strategy:
+#   1. pd.read_html() fetches and parses all tables on the page in one call
+#   2. Find the main market table (has a "Symbol" column, ~35+ rows)
+#   3. Match the table's Symbol column against the user's tickers dynamically
+#   4. Extract price + change data from whatever columns are present
 # ─────────────────────────────────────────────────────────────────────────────
 
-SOURCE = "gsemarketwatch.com"
+GMWATCH_URL = "https://gsemarketwatch.com/"
 
-# All known pages/endpoints on gsemarketwatch.com that might hold the table.
-# Tried in order; first successful match wins.
-GMWATCH_URLS = [
-    "https://gsemarketwatch.com/",
-    "https://gsemarketwatch.com/equities/",
-    "https://gsemarketwatch.com/market/",
-    "https://gsemarketwatch.com/stocks/",
-    "https://gsemarketwatch.com/market-data/",
-    "https://gsemarketwatch.com/live/",
-    # Common REST / JSON endpoints that some market-watch sites expose
-    "https://gsemarketwatch.com/api/stocks",
-    "https://gsemarketwatch.com/api/equities",
-    "https://gsemarketwatch.com/api/market",
-    "https://gsemarketwatch.com/api/market-data",
-    "https://gsemarketwatch.com/api/live",
-    "https://gsemarketwatch.com/wp-json/gse/v1/stocks",
-    "https://gsemarketwatch.com/wp-json/gse/v1/equities",
-]
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/json,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://gsemarketwatch.com/",
-}
+# Preferred price column names, checked in order — first match wins
+PRICE_COL_CANDIDATES  = ["Last Trade Price", "Last Price", "Price", "Close", "Trade Price"]
+CHANGE_COL_CANDIDATES = ["%Change", "% Change", "Change%", "Change (%)", "Pct Change"]
+CHGABS_COL_CANDIDATES = ["Change (GHS)", "Change", "Net Change"]
 
 
 def _normalize(s: str) -> str:
@@ -176,251 +151,119 @@ def _normalize(s: str) -> str:
     return re.sub(r"[^A-Z0-9]", "", s.upper())
 
 
-def _to_float(s: str):
-    """Parse '4.50', '1,234.56', '-0.03' → float, or None on failure."""
+def _pick_col(df_cols: list, candidates: list):
+    """Return the first candidate column that exists in df_cols, or None."""
+    cols_norm = {c.strip(): c for c in df_cols}
+    for cand in candidates:
+        if cand.strip() in cols_norm:
+            return cols_norm[cand.strip()]
+    return None
+
+
+def _to_float(val) -> float | None:
+    """Safely coerce a cell value to float, stripping currency symbols/commas."""
     try:
-        val = float(re.sub(r"[^\d.\-]", "", s.replace(",", "")))
-        return val if val != 0 else None
+        if pd.isna(val):
+            return None
+        cleaned = re.sub(r"[^\d.\-]", "", str(val).replace(",", ""))
+        f = float(cleaned)
+        return f if f == f else None   # guard NaN
     except Exception:
         return None
-
-
-def _is_price_like(val):
-    """True if val looks like a realistic share price (0.001 – 99999)."""
-    return val is not None and 0.001 < val < 99_999
-
-
-def _detect_columns(rows: list[list[str]], wanted_norm: set[str]):
-    """
-    Examine all rows and figure out:
-      - ticker_col : column index whose values most often match wanted tickers
-      - price_col  : column index whose values most often look like share prices
-      - change_col : column index whose values look like daily % changes (optional)
-
-    Returns (ticker_col, price_col, change_col) or None if detection fails.
-    """
-    if not rows:
-        return None
-
-    n_cols = max(len(r) for r in rows)
-    if n_cols < 2:
-        return None
-
-    # Score each column as a ticker column
-    ticker_scores = []
-    for ci in range(n_cols):
-        hits = sum(1 for r in rows if ci < len(r) and _normalize(r[ci]) in wanted_norm)
-        ticker_scores.append(hits)
-
-    best_ticker_col = max(range(n_cols), key=lambda i: ticker_scores[i])
-    if ticker_scores[best_ticker_col] == 0:
-        return None  # none of our tickers found anywhere
-
-    # Score remaining columns as price columns
-    def col_price_score(ci):
-        return sum(
-            1 for r in rows
-            if ci < len(r) and _is_price_like(_to_float(r[ci]))
-        )
-
-    non_ticker = [i for i in range(n_cols) if i != best_ticker_col]
-    if not non_ticker:
-        return None
-    best_price_col = max(non_ticker, key=col_price_score)
-
-    # Optionally find a % change column: values that contain "%"
-    # or are small signed floats (e.g. "+0.05", "-1.20")
-    change_col = None
-    for ci in non_ticker:
-        if ci == best_price_col:
-            continue
-        pct_hits = sum(
-            1 for r in rows
-            if ci < len(r) and (
-                "%" in r[ci]
-                or re.fullmatch(r"[+\-]\d+\.?\d*", r[ci].strip())
-            )
-        )
-        if pct_hits >= max(2, len(rows) * 0.25):
-            change_col = ci
-            break
-
-    return best_ticker_col, best_price_col, change_col
-
-
-def _extract_from_rows(rows: list[list[str]], wanted_norm: set[str],
-                       original_tickers: tuple) -> dict:
-    """
-    Given table rows and the detected column layout, extract prices.
-    Returns { original_ticker: {price, source, change_pct} }.
-    """
-    detection = _detect_columns(rows, wanted_norm)
-    if not detection:
-        return {}
-
-    ticker_col, price_col, change_col = detection
-    results = {}
-
-    # Build a quick lookup: normalised_ticker → original casing
-    norm_to_orig = {_normalize(t): t for t in original_tickers}
-
-    for row in rows:
-        if ticker_col >= len(row):
-            continue
-        norm = _normalize(row[ticker_col])
-        if norm not in wanted_norm:
-            continue
-        if price_col >= len(row):
-            continue
-        price = _to_float(row[price_col])
-        if not _is_price_like(price):
-            continue
-
-        chg = 0.0
-        if change_col is not None and change_col < len(row):
-            raw_chg = re.sub(r"[^+\-\d.]", "", row[change_col].strip())
-            try:
-                chg = float(raw_chg)
-            except Exception:
-                chg = 0.0
-
-        orig = norm_to_orig.get(norm, norm)
-        results[orig] = {
-            "price":      price,
-            "source":     SOURCE,
-            "change_pct": round(chg, 2),
-        }
-
-    return results
-
-
-def _rows_from_html(html: str) -> list[list[list[str]]]:
-    """
-    Parse ALL tables from an HTML page.
-    Returns list of tables, each table = list of rows, each row = list of strings.
-    Also attempts to parse JavaScript-embedded JSON arrays (DataTables, etc.).
-    """
-    from bs4 import BeautifulSoup
-
-    soup = BeautifulSoup(html, "html.parser")
-    all_row_sets = []
-
-    # ── Standard HTML tables ──────────────────────────────────────────────
-    for tbl in soup.find_all("table"):
-        rows = []
-        for tr in tbl.find_all("tr"):
-            cells = [td.get_text(" ", strip=True)
-                     for td in tr.find_all(["td", "th"])]
-            if cells:
-                rows.append(cells)
-        if rows:
-            all_row_sets.append(rows)
-
-    # ── Embedded JSON in <script> tags (DataTables, inline data) ─────────
-    for script in soup.find_all("script"):
-        text = script.string or ""
-        # Look for arrays of objects: [{...},{...}]
-        for match in re.finditer(r"\[\s*\{[^;]{20,}\}\s*\]", text):
-            try:
-                import json
-                data = json.loads(match.group())
-                if isinstance(data, list) and data and isinstance(data[0], dict):
-                    rows = [list(str(v) for v in rec.values()) for rec in data]
-                    if rows:
-                        all_row_sets.append(rows)
-            except Exception:
-                pass
-
-    return all_row_sets
-
-
-def _rows_from_json(data) -> list[list[str]]:
-    """
-    Flatten a JSON response (dict or list) into a list of rows (list of strings).
-    Handles: plain list of dicts, {"data": [...]}, {"stocks": [...]}, etc.
-    """
-    if isinstance(data, list):
-        records = data
-    elif isinstance(data, dict):
-        # Try common envelope keys
-        for key in ("data", "stocks", "equities", "results",
-                    "securities", "items", "rows", "records"):
-            if key in data and isinstance(data[key], list):
-                records = data[key]
-                break
-        else:
-            # Maybe the dict IS the data (keyed by ticker)
-            records = list(data.values()) if data else []
-    else:
-        return []
-
-    rows = []
-    for rec in records:
-        if isinstance(rec, dict):
-            rows.append([str(v) for v in rec.values()])
-        elif isinstance(rec, list):
-            rows.append([str(v) for v in rec])
-    return rows
 
 
 @st.cache_data(ttl=300, show_spinner=False)   # cache 5 minutes
 def fetch_live_prices(tickers: tuple) -> dict:
     """
-    Scrape gsemarketwatch.com for live GSE equity prices.
-    Tries every known URL/endpoint, handles both HTML tables and JSON responses.
-    Matches by dynamically detecting columns — no hardcoded ticker map.
+    Fetch live GSE prices from gsemarketwatch.com using pd.read_html().
 
-    Returns: { ticker: {"price": float, "source": str, "change_pct": float} }
+    - Automatically finds the main market table (largest table with a Symbol column)
+    - Matches symbols dynamically — no hardcoded ticker map
+    - Extracts price, % change, and absolute change where available
+
+    Returns: { ticker: {"price": float, "source": str, "change_pct": float,
+                         "change_abs": float} }
     """
-    import requests
-
-    wanted_norm = {_normalize(t) for t in tickers}
-    results     = {}
-    session     = requests.Session()
-    session.headers.update(HEADERS)
+    results = {}
 
     try:
-        for url in GMWATCH_URLS:
-            if results:
-                # Already have all tickers — no need to keep fetching
-                still_missing = wanted_norm - {_normalize(k) for k in results}
-                if not still_missing:
-                    break
-
-            try:
-                resp = session.get(url, timeout=14, allow_redirects=True)
-            except Exception:
-                continue
-
-            if resp.status_code != 200:
-                continue
-
-            content_type = resp.headers.get("Content-Type", "")
-
-            # ── JSON endpoint ─────────────────────────────────────────────
-            if "json" in content_type or resp.text.lstrip()[:1] in ("[", "{"):
-                try:
-                    payload = resp.json()
-                    rows    = _rows_from_json(payload)
-                    if rows:
-                        found = _extract_from_rows(rows, wanted_norm, tickers)
-                        results.update(found)
-                        if found:
-                            continue   # got some, keep going for stragglers
-                except Exception:
-                    pass
-
-            # ── HTML page ─────────────────────────────────────────────────
-            row_sets = _rows_from_html(resp.text)
-            for rows in row_sets:
-                found = _extract_from_rows(rows, wanted_norm, tickers)
-                results.update(found)
-                # Don't break — later tables on same page might have more tickers
-
+        # read_html fetches the URL and parses every <table> on the page
+        all_tables = pd.read_html(
+            GMWATCH_URL,
+            flavor="bs4",          # reliable HTML parser
+            thousands=",",
+            displayed_only=False,  # include hidden tables (some sites hide the main one)
+        )
     except Exception:
-        pass
-    finally:
-        session.close()
+        return results             # network error or no tables found → silent fallback
+
+    # ── Find the main market table ────────────────────────────────────────
+    # Criteria: must have a "Symbol" column (case-insensitive) and enough rows
+    main_df = None
+    for df in all_tables:
+        # Normalise column names
+        df.columns = df.columns.str.strip()
+        symbol_col = next(
+            (c for c in df.columns if c.strip().upper() == "SYMBOL"), None
+        )
+        if symbol_col and len(df) >= 5:   # ≥5 rows = real data, not a header table
+            # Prefer the largest such table (the full market list)
+            if main_df is None or len(df) > len(main_df):
+                main_df = df
+                main_df["_symbol_col"] = symbol_col
+
+    if main_df is None:
+        return results
+
+    symbol_col = main_df.pop("_symbol_col")
+    cols        = list(main_df.columns)
+
+    # ── Identify price / change columns dynamically ───────────────────────
+    price_col  = _pick_col(cols, PRICE_COL_CANDIDATES)
+    pct_col    = _pick_col(cols, CHANGE_COL_CANDIDATES)
+    chgabs_col = _pick_col(cols, CHGABS_COL_CANDIDATES)
+
+    # Last resort: if no named price column found, take the first numeric column
+    # that isn't the symbol column and has values in a realistic price range
+    if price_col is None:
+        for c in cols:
+            if c == symbol_col:
+                continue
+            sample = main_df[c].dropna().head(10)
+            numeric = [_to_float(v) for v in sample]
+            numeric = [v for v in numeric if v and 0.001 < v < 99_999]
+            if len(numeric) >= 3:
+                price_col = c
+                break
+
+    if price_col is None:
+        return results   # couldn't identify a price column at all
+
+    # ── Build a normalised symbol → row lookup ────────────────────────────
+    norm_to_orig = {_normalize(t): t for t in tickers}
+    wanted_norm  = set(norm_to_orig.keys())
+
+    for _, row in main_df.iterrows():
+        sym_raw = str(row.get(symbol_col, ""))
+        sym_norm = _normalize(sym_raw)
+
+        if sym_norm not in wanted_norm:
+            continue   # not one of the user's stocks
+
+        price = _to_float(row.get(price_col))
+        if not price or price <= 0:
+            continue
+
+        chg_pct = _to_float(row.get(pct_col))    if pct_col    else None
+        chg_abs = _to_float(row.get(chgabs_col)) if chgabs_col else None
+
+        orig = norm_to_orig[sym_norm]
+        results[orig] = {
+            "price":      price,
+            "source":     "gsemarketwatch.com ✓",
+            "change_pct": round(chg_pct, 2) if chg_pct is not None else 0.0,
+            "change_abs": round(chg_abs, 4) if chg_abs is not None else 0.0,
+        }
 
     return results
 
@@ -542,6 +385,7 @@ def inject_live_prices(equities: list, live: dict) -> list:
             lp   = live[t]["price"]
             src  = live[t]["source"]
             chg  = live[t]["change_pct"]
+            chga = live[t].get("change_abs", 0.0)
             mval = e["qty"] * lp
             gl   = mval - e["total_cost"]
             glp  = (gl / e["total_cost"] * 100) if e["total_cost"] else 0
@@ -549,14 +393,16 @@ def inject_live_prices(equities: list, live: dict) -> list:
                 "live_price":     lp,
                 "price_source":   src,
                 "price_change":   chg,
+                "price_change_abs": chga,
                 "market_value":   mval,
                 "gain_loss":      gl,
                 "gain_pct":       glp,
             })
         else:
-            e["live_price"]   = None
-            e["price_source"] = "Statement"
-            e["price_change"] = 0.0
+            e["live_price"]       = None
+            e["price_source"]     = "Statement"
+            e["price_change"]     = 0.0
+            e["price_change_abs"] = 0.0
         updated.append(e)
     return updated
 
@@ -1051,6 +897,7 @@ def main():
             "Live Price":     live_str,
             "Price Source":   e["price_source"],
             "Daily Chg%":     f"{e.get('price_change', 0):+.2f}%" if e.get("live_price") else "—",
+            "Daily Chg GHS":  f"{e.get('price_change_abs', 0):+.4f}" if e.get("live_price") else "—",
             "Cost Basis":     f"GHS {e['total_cost']:,.2f}",
             "Market Value":   f"GHS {e['market_value']:,.2f}",
             "Gain/Loss GHS":  f"{'+'if e['gain_loss']>=0 else ''}{e['gain_loss']:,.2f}",
