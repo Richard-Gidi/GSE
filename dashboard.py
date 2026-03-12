@@ -189,12 +189,6 @@ hr{{border:none!important;height:1px!important;background:linear-gradient(90deg,
 .land-title{{font-size:1.05rem;font-weight:800;color:{p.TEXT};margin-bottom:8px;letter-spacing:-.01em;}}
 .land-desc{{font-size:.82rem;color:{p.MUTED};line-height:1.6;}}
 
-/* AI INSIGHT CARD */
-.ai-card{{background:rgba(22,25,41,0.9);backdrop-filter:blur(20px);border:1px solid {PURPLE}33;border-radius:18px;padding:24px 28px;margin-bottom:16px;box-shadow:0 4px 24px rgba(108,99,255,0.12);position:relative;overflow:hidden;}}
-.ai-card::before{{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,{PURPLE},{INDIGO},{TEAL});}}
-.ai-card-title{{font-size:.75rem;font-weight:700;color:{PURPLE};text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;}}
-.ai-card-body{{font-size:.9rem;color:{p.TEXT2};line-height:1.8;}}
-
 /* MISC */
 .rich-divider{{height:1px;background:linear-gradient(90deg,transparent,{PURPLE}44,{TEAL}44,transparent);border:none;margin:28px 0;}}
 .pos{{color:{GREEN}!important;font-weight:700;}}
@@ -1017,74 +1011,6 @@ def generate_alerts(eq, m, txs):
 
     return alerts
 
-# ─────────────────────────────────────────────────────────────────────────────
-# AI INSIGHTS via Anthropic API
-# ─────────────────────────────────────────────────────────────────────────────
-def generate_ai_insights(eq, m, txs, api_key):
-    """Call Claude claude-sonnet-4-20250514 with portfolio summary for natural language analysis."""
-    try:
-        import anthropic
-    except ImportError:
-        return None, "Install anthropic: pip install anthropic"
-
-    sec_summary = (pd.DataFrame(eq)
-                   .groupby("sector")["market_value"].sum()
-                   .sort_values(ascending=False)
-                   .head(5).to_dict())
-    top_holdings = sorted(eq, key=lambda e: e["market_value"], reverse=True)[:5]
-
-    prompt = f"""You are an expert Ghanaian equity portfolio analyst specialising in the Ghana Stock Exchange (GSE).
-
-Analyse this client's IC Securities portfolio and provide actionable, specific insights.
-
-PORTFOLIO SUMMARY:
-- Total Value: GHS {m['total_value']:,.2f}
-- Net Cash Invested: GHS {m['net_invested']:,.2f}
-- Overall ROI: {m['overall_roi']:+.2f}%
-- CAGR: {f"{m['cagr']:+.2f}%" if m['cagr'] is not None else "N/A"}
-- Unrealised Gain/Loss: GHS {m['total_gain']:+,.2f} ({m['gain_pct']:+.2f}%)
-- Win Rate: {m['winners']}/{len(eq)} positions profitable
-- HHI Concentration: {m['hhi']} ({"Low" if m['hhi'] < 1500 else "Moderate" if m['hhi'] < 2500 else "High"})
-- Portfolio Health Score: {m['health_score']}/100
-- Sectors: {m['sectors_used']} different sectors
-- Dividend Income: GHS {m['dividend_income']:,.2f}
-- Cash Balance: GHS {m['cash_val']:,.2f}
-
-TOP 5 HOLDINGS:
-{chr(10).join(f"  {e['ticker']} ({e['sector']}): GHS {e['market_value']:,.2f} | Return: {e['gain_pct']:+.1f}%" for e in top_holdings)}
-
-SECTOR BREAKDOWN (top 5):
-{chr(10).join(f"  {s}: GHS {v:,.2f}" for s, v in sec_summary.items())}
-
-ALL POSITIONS (ticker | gain%):
-{", ".join(f"{e['ticker']} {e['gain_pct']:+.1f}%" for e in sorted(eq, key=lambda x: x['gain_pct'], reverse=True))}
-
-Provide your analysis in exactly these 4 sections using these exact headers:
-
-## Executive Summary
-2-3 sentences on overall portfolio health and standout observations.
-
-## Top Opportunities
-3 specific, actionable opportunities (buy more, rebalance, sector rotation) with reasoning specific to Ghana/GSE context.
-
-## Key Risks
-3 specific risks to monitor with mitigation suggestions.
-
-## Strategic Recommendations
-3 concrete next steps the investor should take in the next 30-90 days.
-
-Be specific to Ghanaian market conditions, GSE dynamics, and the cedi. Keep language clear and direct."""
-
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1200,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return msg.content[0].text, None
-    except Exception as exc:
-        return None, str(exc)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SIDEBAR
@@ -1097,9 +1023,16 @@ def render_sidebar():
                     f"📡 LIVE GSE PRICES</div>", unsafe_allow_html=True)
         st.success("✅ GSE-API (dev.kwayisi.org) + afx fallback")
         if st.button("🔄 Refresh Live Prices", use_container_width=True, type="primary"):
-            st.cache_data.clear()
-            st.success("Cache cleared — reloading...")
+            st.cache_data.clear()   # clears price cache only — PDF stays in session_state
             st.rerun()
+
+        # Let the user explicitly clear their loaded statement
+        if "pdf_name" in st.session_state:
+            st.caption(f"Loaded: {st.session_state['pdf_name']}")
+            if st.button("🗑️ Clear Statement", use_container_width=True):
+                st.session_state.pop("pdf_data", None)
+                st.session_state.pop("pdf_name", None)
+                st.rerun()
         st.divider()
         st.markdown(f"<div style='font-size:.72rem;color:{p.MUTED};font-weight:600;"
                     f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;'>"
@@ -1138,7 +1071,18 @@ def main():
 
     # ── Upload ────────────────────────────────────────────────────────────────
     uploaded = st.file_uploader("**📄 Drop your IC Securities Account Statement (PDF)**", type=["pdf"])
-    if not uploaded:
+
+    # Persist PDF bytes across reruns (price refresh, sliders, etc.)
+    if uploaded is not None:
+        new_bytes = uploaded.read()
+        # Only re-parse if it's a different file
+        if st.session_state.get("pdf_name") != uploaded.name or "pdf_data" not in st.session_state:
+            with st.spinner("📄 Parsing statement..."):
+                st.session_state["pdf_data"] = parse_pdf(new_bytes)
+                st.session_state["pdf_name"] = uploaded.name
+
+    # If no file is currently in the widget but we have a cached parse, use it
+    if "pdf_data" not in st.session_state:
         st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
         c1, c2, c3, c4, c5 = st.columns(5)
         features = [
@@ -1146,7 +1090,7 @@ def main():
             ("📈", "Performance", "Attribution, P&L waterfall, efficiency, sector donut, live prices."),
             ("⚖️", "Risk & Scenarios", "HHI gauge, break-even, sector risk, what-if simulator."),
             ("💸", "Cash Flow", "Monthly flows, dividend timeline, cumulative chart."),
-            ("🤖", "AI Insights", "Claude-powered natural language portfolio analysis (API key needed)."),
+
         ]
         for col, (icon, title, desc) in zip([c1,c2,c3,c4,c5], features):
             with col:
@@ -1156,14 +1100,21 @@ def main():
                             unsafe_allow_html=True)
         st.stop()
 
-    # ── Parse ─────────────────────────────────────────────────────────────────
-    with st.spinner("📄 Parsing statement..."):
-        data = parse_pdf(uploaded.read())
-    eq = data["equities"]
-    txs = data["transactions"]
-    ps  = data["portfolio_summary"]
+    # ── Use cached parsed data ────────────────────────────────────────────────
+    data = st.session_state["pdf_data"]
+    eq   = data["equities"]
+    txs  = data["transactions"]
+    ps   = data["portfolio_summary"]
+
+    # Show which file is loaded when the widget is empty (after a refresh)
+    if uploaded is None:
+        st.info(f"📄 Using loaded statement: **{st.session_state.get('pdf_name', 'unknown')}** — "
+                f"upload a new file above to switch.", icon="📋")
+
     if not eq:
         st.error("Could not parse equity data. Please check the PDF format.")
+        st.session_state.pop("pdf_data", None)
+        st.session_state.pop("pdf_name", None)
         st.stop()
 
     # ── Live prices ───────────────────────────────────────────────────────────
@@ -1689,77 +1640,7 @@ def main():
         st.caption(f"Showing {len(view_show):,} of {len(tx_df):,} transactions")
         st.dataframe(view_show, use_container_width=True, hide_index=True, height=420)
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 6 — AI INSIGHTS
-    # ═══════════════════════════════════════════════════════════════════════════
-    with tab6:
-        shdr("🤖 AI Portfolio Insights")
-        st.markdown(
-            f"<div style='font-size:.88rem;color:{p.MUTED};margin-bottom:20px;line-height:1.7;'>"
-            f"Claude analyses your portfolio data and provides natural language insights tailored to "
-            f"the Ghana Stock Exchange context — including opportunities, risks, and strategic recommendations."
-            f"</div>", unsafe_allow_html=True)
-
-        api_key = st.session_state.get("anthropic_key", "")
-        if not api_key:
-            st.info("🔑 Enter your Anthropic API key in the sidebar to unlock AI Insights.")
-            st.markdown(
-                f"<div style='background:rgba(108,99,255,0.08);border:1px dashed {PURPLE}55;"
-                f"border-radius:14px;padding:24px;margin-top:16px;text-align:center;'>"
-                f"<div style='font-size:3rem;margin-bottom:12px;'>🤖</div>"
-                f"<div style='font-weight:700;color:{p.TEXT};margin-bottom:8px;'>AI Insights Ready</div>"
-                f"<div style='font-size:.85rem;color:{p.MUTED};'>Add your API key in the sidebar to generate "
-                f"Claude-powered portfolio analysis specific to your holdings and the Ghanaian market.</div>"
-                f"</div>", unsafe_allow_html=True)
-        else:
-            col_btn, col_info = st.columns([2, 5])
-            with col_btn:
-                run_ai = st.button("🚀 Generate AI Analysis", type="primary", use_container_width=True)
-            with col_info:
-                st.markdown(f"<div style='font-size:.8rem;color:{p.MUTED};padding-top:12px;'>"
-                            f"Will analyse {len(eq)} positions across {m['sectors_used']} sectors. "
-                            f"~5–10 seconds.</div>", unsafe_allow_html=True)
-
-            if run_ai or st.session_state.get("ai_result"):
-                if run_ai:
-                    with st.spinner("🤖 Claude is analysing your portfolio..."):
-                        result, error = generate_ai_insights(eq, m, txs, api_key)
-                    if result:
-                        st.session_state["ai_result"] = result
-                    else:
-                        st.error(f"API error: {error}")
-
-                result = st.session_state.get("ai_result", "")
-                if result:
-                    # Parse sections and render as styled cards
-                    sections = re.split(r"\n## ", "\n" + result)
-                    section_icons = {
-                        "Executive Summary": "📋",
-                        "Top Opportunities": "🎯",
-                        "Key Risks": "⚠️",
-                        "Strategic Recommendations": "🗺️",
-                    }
-                    for sec in sections:
-                        if not sec.strip():
-                            continue
-                        lines = sec.strip().split("\n", 1)
-                        title = lines[0].strip("# ").strip()
-                        body = lines[1].strip() if len(lines) > 1 else ""
-                        icon = section_icons.get(title, "💡")
-                        # Convert markdown bold to html
-                        body_html = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", body)
-                        body_html = body_html.replace("\n", "<br>")
-                        st.markdown(
-                            f"<div class='ai-card'>"
-                            f"<div class='ai-card-title'>{icon} {title}</div>"
-                            f"<div class='ai-card-body'>{body_html}</div>"
-                            f"</div>", unsafe_allow_html=True)
-
-                    st.markdown("")
-                    if st.button("🔄 Regenerate Analysis"):
-                        st.session_state.pop("ai_result", None)
-                        st.rerun()
-
+    
     # ── Footer ────────────────────────────────────────────────────────────────
     p2 = th()
     st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
@@ -1770,7 +1651,7 @@ def main():
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="font-size:1.2rem;">📈</span>
         <span><b style='color:{PURPLE}'>IC Portfolio Analyser v2.0</b> &nbsp;·&nbsp;
-        Built for IC Securities Ghana · Powered by GSE-API + Claude AI</span>
+        Built for IC Securities Ghana · Powered by GSE-API</span>
       </div>
       <div style="display:flex;gap:20px;align-items:center;">
         <span>Prices via
