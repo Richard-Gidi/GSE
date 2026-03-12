@@ -1033,16 +1033,7 @@ def render_sidebar():
                 st.session_state.pop("pdf_data", None)
                 st.session_state.pop("pdf_name", None)
                 st.rerun()
-        st.divider()
-        st.markdown(f"<div style='font-size:.72rem;color:{p.MUTED};font-weight:600;"
-                    f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;'>"
-                    f"🤖 AI INSIGHTS (Optional)</div>", unsafe_allow_html=True)
-        ai_key = st.text_input("Anthropic API Key", type="password",
-                               placeholder="sk-ant-...", key="anthropic_key",
-                               help="Enter your Anthropic API key to enable AI portfolio analysis in the AI Insights tab.")
-        if ai_key:
-            st.session_state["anthropic_key"] = ai_key
-            st.success("Key saved — see AI Insights tab")
+
         st.divider()
         st.markdown(f"<div style='font-size:.72rem;color:{p.MUTED};line-height:1.6;'>"
                     f"IC Portfolio Analyser v2.0<br>"
