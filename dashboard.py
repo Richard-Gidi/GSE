@@ -281,6 +281,100 @@ hr {{ border:none !important; height:1px !important;
 .rdiv {{ height:1px; background:linear-gradient(90deg,transparent,{PURPLE}44,{TEAL}44,transparent);
          border:none; margin:28px 0; }}
 
+
+/* ══════════════════════════════════════════════
+   NUCLEAR DARK — kill every Streamlit white leak
+══════════════════════════════════════════════ */
+/* Main containers */
+[data-testid="stMainBlockContainer"],
+[data-testid="stVerticalBlock"],
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stHorizontalBlock"],
+[data-testid="block-container"],
+.main, .main > div, .main .block-container,
+[data-testid="stAppViewBlockContainer"],
+[data-testid="stBottom"],
+div[class*="stColumn"] > div,
+div[class*="stForm"],
+div[class*="stFormContainer"] {
+    background: transparent !important;
+    color: #e8eaf6 !important;
+}
+/* Inputs */
+input, textarea, select,
+[data-testid="stTextInput"] input,
+[data-testid="stTextArea"] textarea,
+[data-testid="stNumberInput"] input,
+[data-testid="stSelectbox"] div,
+[data-testid="stMultiSelect"] div,
+[data-testid="stDateInput"] input {
+    background: #1e2235 !important;
+    color: #e8eaf6 !important;
+    border-color: #252840 !important;
+}
+/* Selectbox dropdowns */
+[data-baseweb="select"] div,
+[data-baseweb="popover"] div,
+[data-baseweb="menu"] div,
+[role="listbox"], [role="option"],
+[data-testid="stSelectbox"] [data-baseweb="select"] {
+    background: #1e2235 !important;
+    color: #e8eaf6 !important;
+    border-color: #252840 !important;
+}
+/* Slider */
+[data-testid="stSlider"] div,
+[data-baseweb="slider"] div {
+    background: transparent !important;
+}
+/* Multiselect tags */
+[data-baseweb="tag"] {
+    background: #2e3355 !important;
+    color: #e8eaf6 !important;
+}
+/* Alerts/messages */
+[data-testid="stAlert"],
+[data-testid="stAlertContainer"],
+div[class*="stAlert"] {
+    background: #1e2235 !important;
+    border-color: #252840 !important;
+    color: #e8eaf6 !important;
+}
+/* Button base */
+button[kind="secondary"], button[kind="secondaryFormSubmit"] {
+    background: #1e2235 !important;
+    border-color: #252840 !important;
+    color: #e8eaf6 !important;
+}
+button[kind="primary"] {
+    background: linear-gradient(135deg,#6c63ff,#5a52e8) !important;
+    border: none !important;
+    color: white !important;
+}
+/* Spinner */
+[data-testid="stSpinner"] > div {
+    border-top-color: #6c63ff !important;
+}
+/* Caption / small text */
+small, [data-testid="stCaptionContainer"],
+[data-testid="stMarkdownContainer"] p {
+    color: #8892b0 !important;
+}
+/* File uploader text */
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] p {
+    color: #8892b0 !important;
+}
+/* Expander header */
+[data-testid="stExpander"] summary span {
+    color: #e8eaf6 !important;
+}
+/* Date input calendar popup */
+[data-baseweb="datepicker"] {
+    background: #1e2235 !important;
+    color: #e8eaf6 !important;
+}
+
 /* ── Scrollbar ── */
 *::-webkit-scrollbar {{ width:5px; height:5px; }}
 *::-webkit-scrollbar-track {{ background:{BG}; }}
@@ -868,12 +962,13 @@ def main():
     </div>""", unsafe_allow_html=True)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊  Overview",
         "📈  Performance",
         "⚖️  Risk & Scenarios",
         "💸  Cash Flow",
         "📋  Holdings",
+        "🎯  Rebalancer",
     ])
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1092,6 +1187,255 @@ def main():
         view_show["Description"] =view_show["Description"].str[:100]
         st.caption(f"Showing {len(view_show):,} of {len(tx_df):,} transactions")
         st.dataframe(view_show,use_container_width=True,hide_index=True,height=420)
+
+
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab6:
+        shdr("🎯 Portfolio Rebalancing Engine",
+             "Set your ideal allocation — get exact trades to execute")
+
+        st.markdown(f"""
+        <div style='background:linear-gradient(135deg,rgba(108,99,255,.1),rgba(0,201,177,.07));
+                    border:1px solid {PURPLE}33;border-radius:16px;padding:18px 24px;
+                    margin-bottom:24px;position:relative;overflow:hidden;'>
+          <div style='position:absolute;top:0;left:0;right:0;height:2px;
+                      background:linear-gradient(90deg,{PURPLE},{TEAL});'></div>
+          <div style='font-size:.8rem;font-weight:700;color:{PURPLE};text-transform:uppercase;
+                      letter-spacing:.07em;margin-bottom:6px;'>How it works</div>
+          <div style='font-size:.88rem;color:{TEXT2};line-height:1.65;'>
+            Set your <b style='color:{TEXT}'>target weight %</b> for each stock.
+            The engine calculates the exact <b style='color:{GREEN}'>shares to buy</b> or
+            <b style='color:{RED}'>shares to sell</b> to reach your ideal allocation —
+            using your current portfolio value. Weights must add up to 100%.
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        # Current weights for reference
+        tot_eq = sum(e["market_value"] for e in eq)
+        current_weights = {e["ticker"]: e["market_value"] / tot_eq * 100 for e in eq} if tot_eq else {}
+
+        # ── Show current vs target side by side ──
+        shdr("Set Target Weights", f"Current equity pool: GHS {tot_eq:,.2f}")
+
+        # Target weight inputs
+        target_weights = {}
+        n_cols = 5
+        rows = [eq[i:i+n_cols] for i in range(0, len(eq), n_cols)]
+
+        for row in rows:
+            cols = st.columns(len(row))
+            for col, e in zip(cols, row):
+                curr = current_weights.get(e["ticker"], 0)
+                with col:
+                    st.markdown(
+                        f"<div style='text-align:center;font-size:.68rem;color:{MUTED};"
+                        f"text-transform:uppercase;letter-spacing:.07em;margin-bottom:2px;'>{e['ticker']}</div>"
+                        f"<div style='text-align:center;font-size:.78rem;color:{PURPLE};margin-bottom:4px;'>"
+                        f"now {curr:.1f}%</div>", unsafe_allow_html=True)
+                    tw = st.number_input(
+                        f"Target {e['ticker']}", min_value=0.0, max_value=100.0,
+                        value=round(curr, 1), step=0.5, format="%.1f",
+                        key=f"rw_{e['ticker']}", label_visibility="collapsed")
+                    target_weights[e["ticker"]] = tw
+
+        total_target = sum(target_weights.values())
+        delta_from_100 = total_target - 100.0
+
+        # Weight bar
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        bar_col, info_col = st.columns([4, 1])
+        with bar_col:
+            bar_pct = min(total_target, 100)
+            bar_color = GREEN if abs(delta_from_100) < 0.1 else (AMBER if abs(delta_from_100) < 5 else RED)
+            st.markdown(f"""
+            <div style='background:{BORDER};border-radius:8px;height:12px;overflow:hidden;'>
+              <div style='background:{bar_color};height:100%;width:{bar_pct:.1f}%;
+                          transition:width .3s;border-radius:8px;'></div>
+            </div>""", unsafe_allow_html=True)
+        with info_col:
+            status = "✅ Perfect" if abs(delta_from_100) < 0.1 else f"{'+'if delta_from_100>0 else ''}{delta_from_100:.1f}%"
+            st.markdown(f"<div style='font-size:.88rem;font-weight:700;"
+                        f"color:{GREEN if abs(delta_from_100)<0.1 else AMBER};text-align:right;"
+                        f"padding-top:2px;'>{status}</div>", unsafe_allow_html=True)
+
+        if abs(delta_from_100) > 0.1:
+            st.warning(f"Weights sum to {total_target:.1f}% — adjust to reach exactly 100% before calculating.")
+        else:
+            rdiv()
+            shdr("Rebalancing Trade Plan")
+
+            # ── Calculate trades ──
+            cash_to_deploy = st.number_input(
+                "Additional cash to deploy (GHS)", min_value=0.0, value=0.0,
+                step=100.0, format="%.2f",
+                help="Optional: add extra cash on top of existing portfolio for rebalancing")
+
+            total_pool = tot_eq + cash_to_deploy
+            trades = []
+            for e in eq:
+                ticker    = e["ticker"]
+                target_w  = target_weights[ticker] / 100
+                target_mv = total_pool * target_w
+                current_mv = e["market_value"]
+                diff_ghs  = target_mv - current_mv
+                px        = e["live_price"] or e["statement_price"]
+                shares_raw = diff_ghs / px if px > 0 else 0
+                shares    = int(shares_raw)  # whole shares only
+                actual_ghs = shares * px
+                trades.append({
+                    "ticker":        ticker,
+                    "current_mv":    current_mv,
+                    "target_mv":     target_mv,
+                    "current_w":     current_weights[ticker],
+                    "target_w":      target_weights[ticker],
+                    "diff_ghs":      diff_ghs,
+                    "price":         px,
+                    "shares":        shares,
+                    "actual_ghs":    actual_ghs,
+                    "action":        "BUY" if shares > 0 else ("SELL" if shares < 0 else "HOLD"),
+                })
+
+            # ── Summary KPIs ──
+            buys  = [t for t in trades if t["action"] == "BUY"]
+            sells = [t for t in trades if t["action"] == "SELL"]
+            holds = [t for t in trades if t["action"] == "HOLD"]
+            total_buy_ghs  = sum(t["actual_ghs"] for t in buys)
+            total_sell_ghs = sum(abs(t["actual_ghs"]) for t in sells)
+            net_cash_needed = total_buy_ghs - total_sell_ghs - cash_to_deploy
+
+            k1,k2,k3,k4 = st.columns(4)
+            with k1: st.markdown(kpi("Buy Orders",f"{len(buys)} stocks",
+                    f"GHS {total_buy_ghs:,.2f} to spend","g",icon="🟢"),unsafe_allow_html=True)
+            with k2: st.markdown(kpi("Sell Orders",f"{len(sells)} stocks",
+                    f"GHS {total_sell_ghs:,.2f} to receive","r",icon="🔴"),unsafe_allow_html=True)
+            with k3: st.markdown(kpi("Hold",f"{len(holds)} stocks",
+                    "No trade needed","b",icon="⏸️"),unsafe_allow_html=True)
+            with k4:
+                nc = net_cash_needed
+                st.markdown(kpi("Net Cash Needed",
+                    f"<span class='{pn(-nc)}'>GHS {abs(nc):,.2f}</span>",
+                    "surplus" if nc < 0 else "required",
+                    "g" if nc < 0 else "r",icon="💵"),unsafe_allow_html=True)
+
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+            # ── Trade cards ──
+            buy_col, sell_col = st.columns(2)
+
+            for col, group, color, label, arrow in [
+                (buy_col,  buys,  GREEN, "BUY ORDERS",  "▲"),
+                (sell_col, sells, RED,   "SELL ORDERS", "▼"),
+            ]:
+                with col:
+                    st.markdown(
+                        f"<div style='font-size:.72rem;font-weight:700;color:{color};"
+                        f"text-transform:uppercase;letter-spacing:.09em;margin-bottom:12px;'>"
+                        f"{arrow} {label} — {len(group)} trades</div>",
+                        unsafe_allow_html=True)
+                    for t in group:
+                        pct_delta = t["target_w"] - t["current_w"]
+                        st.markdown(f"""
+                        <div style='background:{CARD};border:1px solid {BORDER};
+                                    border-left:4px solid {color};border-radius:14px;
+                                    padding:14px 18px;margin-bottom:10px;
+                                    box-shadow:0 2px 12px {SHADOW};'>
+                          <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;'>
+                            <span style='font-size:1.05rem;font-weight:800;color:{TEXT};'>{t["ticker"]}</span>
+                            <span style='font-size:.8rem;font-weight:700;padding:3px 10px;border-radius:12px;
+                                         background:{"rgba(0,214,143,.15)" if color==GREEN else "rgba(255,61,113,.15)"};
+                                         color:{color};'>{arrow} {abs(t["shares"])} shares</span>
+                          </div>
+                          <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;'>
+                            <div>
+                              <div style='font-size:.63rem;color:{MUTED};text-transform:uppercase;letter-spacing:.08em;'>Price</div>
+                              <div style='font-size:.9rem;font-weight:600;color:{TEXT};'>GHS {t["price"]:.4f}</div>
+                            </div>
+                            <div>
+                              <div style='font-size:.63rem;color:{MUTED};text-transform:uppercase;letter-spacing:.08em;'>Trade Value</div>
+                              <div style='font-size:.9rem;font-weight:600;color:{color};'>GHS {abs(t["actual_ghs"]):,.2f}</div>
+                            </div>
+                            <div>
+                              <div style='font-size:.63rem;color:{MUTED};text-transform:uppercase;letter-spacing:.08em;'>Weight Δ</div>
+                              <div style='font-size:.9rem;font-weight:600;color:{color};'>{pct_delta:+.1f}%</div>
+                            </div>
+                          </div>
+                          <div style='margin-top:10px;'>
+                            <div style='display:flex;justify-content:space-between;
+                                        font-size:.72rem;color:{MUTED};margin-bottom:4px;'>
+                              <span>Current: {t["current_w"]:.1f}%</span>
+                              <span>Target: {t["target_w"]:.1f}%</span>
+                            </div>
+                            <div style='background:{BORDER};border-radius:4px;height:6px;overflow:hidden;'>
+                              <div style='background:{color};height:100%;
+                                          width:{min(t["target_w"], 100):.1f}%;border-radius:4px;'></div>
+                            </div>
+                          </div>
+                        </div>""", unsafe_allow_html=True)
+
+                    if not group:
+                        st.markdown(
+                            f"<div style='text-align:center;color:{MUTED};padding:32px;font-size:.88rem;'>"
+                            f"No {label.lower()} required</div>", unsafe_allow_html=True)
+
+            # ── HOLD list ──
+            if holds:
+                rdiv()
+                shdr("⏸️ Hold — No Trade Needed")
+                hcols = st.columns(min(len(holds), 5))
+                for col, t in zip(hcols, holds):
+                    with col:
+                        st.markdown(f"""
+                        <div style='background:{CARD};border:1px solid {BORDER};border-radius:12px;
+                                    padding:12px 14px;text-align:center;'>
+                          <div style='font-size:.8rem;font-weight:700;color:{MUTED};'>{t["ticker"]}</div>
+                          <div style='font-size:.95rem;font-weight:700;color:{TEXT};margin:4px 0;'>
+                            {t["target_w"]:.1f}%</div>
+                          <div style='font-size:.72rem;color:{MUTED};'>GHS {t["current_mv"]:,.0f}</div>
+                        </div>""", unsafe_allow_html=True)
+
+            # ── Before/After chart ──
+            rdiv()
+            shdr("Before vs After Allocation")
+            tickers_list = [e["ticker"] for e in eq]
+            curr_vals    = [e["market_value"] for e in eq]
+            tgt_vals     = [total_pool * target_weights[e["ticker"]] / 100 for e in eq]
+            fig_reb = go.Figure()
+            fig_reb.add_trace(go.Bar(name="Current", x=tickers_list, y=curr_vals,
+                marker_color=BLUE, opacity=0.8,
+                hovertemplate="%{x}<br>GHS %{y:,.2f}<br>%{customdata:.1f}%<extra>Current</extra>",
+                customdata=[current_weights[t] for t in tickers_list]))
+            fig_reb.add_trace(go.Bar(name="Target", x=tickers_list, y=tgt_vals,
+                marker_color=PURPLE, opacity=0.9,
+                hovertemplate="%{x}<br>GHS %{y:,.2f}<br>%{customdata:.1f}%<extra>Target</extra>",
+                customdata=[target_weights[t] for t in tickers_list]))
+            for i, (ticker, cv, tv) in enumerate(zip(tickers_list, curr_vals, tgt_vals)):
+                fig_reb.add_annotation(
+                    x=ticker, y=max(cv, tv), text=f"{target_weights[ticker]:.0f}%",
+                    showarrow=False, yshift=10, font=dict(color=PURPLE, size=10, family="Inter"))
+            fig_reb.update_layout(title="Portfolio Value: Current vs Rebalanced Target",
+                                  yaxis_title="GHS", barmode="group", **T(), height=360)
+            st.plotly_chart(fig_reb, use_container_width=True)
+
+            # ── Downloadable trade list ──
+            rdiv()
+            shdr("📋 Export Trade List")
+            trade_df = pd.DataFrame([{
+                "Ticker":        t["ticker"],
+                "Action":        t["action"],
+                "Shares":        abs(t["shares"]),
+                "Price (GHS)":   round(t["price"], 4),
+                "Trade Value":   f"GHS {abs(t['actual_ghs']):,.2f}",
+                "Current W%":    f"{t['current_w']:.1f}%",
+                "Target W%":     f"{t['target_w']:.1f}%",
+                "Current MV":    f"GHS {t['current_mv']:,.2f}",
+                "Target MV":     f"GHS {t['target_mv']:,.2f}",
+            } for t in sorted(trades, key=lambda x: {"BUY":0,"SELL":1,"HOLD":2}[x["action"]])])
+            st.dataframe(trade_df, use_container_width=True, hide_index=True)
+            csv = trade_df.to_csv(index=False)
+            st.download_button(
+                "⬇️  Download Trade List (CSV)", data=csv,
+                file_name=f"rebalance_{data['account_number']}_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv", type="primary")
 
 
     # ── Footer ────────────────────────────────────────────────────────────────
