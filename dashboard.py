@@ -54,8 +54,8 @@ TEAL   = "#00c9b1"
 
 
 def th() -> SimpleNamespace:
-    """Return current theme palette."""
-    return _DARK if st.session_state.get("theme", "dark") == "dark" else _LIGHT
+    """Always use dark theme."""
+    return _DARK
 
 
 def T() -> dict:
@@ -1255,24 +1255,6 @@ def render_sidebar():
     is_dark = p.name == "dark"
 
     with st.sidebar:
-        # Theme toggle
-        st.markdown(f"<div style='font-size:.75rem;color:{p.MUTED};font-weight:600;"
-                    f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;'>"
-                    f"APPEARANCE</div>", unsafe_allow_html=True)
-
-        col_a, col_b = st.columns(2)
-        with col_a:
-            dark_style = f"background:{PURPLE};color:white;" if is_dark else f"background:{p.CARD2};color:{p.MUTED};"
-            if st.button("🌙  Dark", use_container_width=True, key="sb_dark"):
-                st.session_state["theme"] = "dark"
-                st.rerun()
-        with col_b:
-            light_style = f"background:{PURPLE};color:white;" if not is_dark else f"background:{p.CARD2};color:{p.MUTED};"
-            if st.button("☀️  Light", use_container_width=True, key="sb_light"):
-                st.session_state["theme"] = "light"
-                st.rerun()
-
-        st.divider()
 
         # GSE Prices
         st.markdown(f"<div style='font-size:.75rem;color:{p.MUTED};font-weight:600;"
@@ -1309,8 +1291,6 @@ def render_sidebar():
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
-    if "theme" not in st.session_state:
-        st.session_state["theme"] = "dark"
 
     apply_theme()
     render_sidebar()
@@ -1335,17 +1315,8 @@ def main():
             unsafe_allow_html=True)
     with cr:
         st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🌙  Dark", use_container_width=True, key="hdr_dark",
-                         disabled=is_dark):
-                st.session_state["theme"] = "dark"; st.rerun()
-        with col2:
-            if st.button("☀️  Light", use_container_width=True, key="hdr_light",
-                         disabled=not is_dark):
-                st.session_state["theme"] = "light"; st.rerun()
 
-    st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+    
 
     # ── Upload ────────────────────────────────────────────────────────────────
     uploaded = st.file_uploader(
