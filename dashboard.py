@@ -340,117 +340,343 @@ def tx_type(desc: str) -> str:
     return "Other"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ██████╗ ██████╗ ██╗ ██████╗███████╗    ███████╗███████╗████████╗ ██████╗██╗  ██╗
-# ██╔══██╗██╔══██╗██║██╔════╝██╔════╝    ██╔════╝██╔════╝╚══██╔══╝██╔════╝██║  ██║
-# ██████╔╝██████╔╝██║██║     █████╗      █████╗  █████╗     ██║   ██║     ███████║
-# ██╔═══╝ ██╔══██╗██║██║     ██╔══╝      ██╔══╝  ██╔══╝     ██║   ██║     ██╔══██║
-# ██║     ██║  ██║██║╚██████╗███████╗    ██║     ███████╗   ██║   ╚██████╗██║  ██║
-# ╚═╝     ╚═╝  ╚═╝╚═╝ ╚═════╝╚══════╝   ╚═╝     ╚══════╝   ╚═╝    ╚═════╝╚═╝  ╚═╝
+# PRICE ENGINE  — 4 strategies, never silently fails
 #
-#  THREE-LAYER PRICE SYSTEM — NO HTML SCRAPING
-#  Layer 1: Bulk live endpoint  (one request for all tickers)
-#  Layer 2: Per-ticker equity   (concurrent fallback)
-#  Layer 3: Manual user override (UI)
+#  Strategy 1 · GSE bulk JSON   dev.kwayisi.org/apis/gse/live         (1 request)
+#  Strategy 2 · GSE per-ticker  dev.kwayisi.org/apis/gse/equities/XX  (concurrent)
+#  Strategy 3 · AFX HTML scrape afx.kwayisi.org/gse/                  (robust multi-selector)
+#  Strategy 4 · User paste      raw JSON or CSV pasted in sidebar      (always works)
+#
+#  Each strategy records why it succeeded/failed → shown in debug expander.
 # ──────────────────────────────────────────────────────────────────────────────
 
-GSE_LIVE_URL     = "https://dev.kwayisi.org/apis/gse/live"
-GSE_EQUITY_URL   = "https://dev.kwayisi.org/apis/gse/equities/{ticker}"
-_HEADERS = {"User-Agent": "Mozilla/5.0 IC-Portfolio-Analyser/3.0", "Accept": "application/json"}
+_GSE_LIVE     = "https://dev.kwayisi.org/apis/gse/live"
+_GSE_EQUITY   = "https://dev.kwayisi.org/apis/gse/equities/{t}"
+_AFX_URL      = "https://afx.kwayisi.org/gse/"
 
-def _parse_equity_item(item: dict, orig_ticker: str) -> dict | None:
-    """Parse one equity record from GSE API (works for both /live and /equities/{tk})."""
-    price = _float(item.get("price") or item.get("closingPrice") or item.get("last"))
+_REQ_HEADERS = [
+    # Try several UA / Accept combos — some servers reject certain agents
+    {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+     "Accept": "application/json, text/html, */*",
+     "Referer": "https://afx.kwayisi.org/"},
+    {"User-Agent": "python-requests/2.31.0",
+     "Accept": "application/json"},
+    {"User-Agent": "curl/8.4.0"},
+]
+
+# ── shared parser ─────────────────────────────────────────────────────────────
+def _parse_item(item: dict) -> dict | None:
+    """Extract price data from one GSE API equity object."""
+    price = _float(
+        item.get("price") or item.get("closingPrice") or
+        item.get("close") or item.get("last") or item.get("value")
+    )
     if not price or price <= 0:
         return None
-    change_abs = _float(item.get("change") or item.get("priceChange") or 0) or 0.0
-    prev = price - change_abs
-    change_pct = round((change_abs / prev * 100) if prev else 0.0, 4)
-    # Extra fundamental data the API sometimes returns
-    pe    = _float(item.get("pe")  or item.get("peRatio"))
-    div_y = _float(item.get("dividendYield") or item.get("yield"))
-    sector = (item.get("sector") or item.get("industry") or "").strip()
+    chg = _float(item.get("change") or item.get("priceChange") or
+                 item.get("change_price") or 0) or 0.0
+    prev = price - chg
     return {
         "price":      price,
-        "change_abs": change_abs,
-        "change_pct": change_pct,
-        "pe":         pe,
-        "div_yield":  div_y,
-        "sector":     sector or "N/A",
+        "change_abs": chg,
+        "change_pct": round((chg / prev * 100) if prev else 0.0, 4),
+        "pe":         _float(item.get("pe") or item.get("peRatio")),
+        "div_yield":  _float(item.get("dividendYield") or item.get("yield")),
+        "sector":     (item.get("sector") or item.get("industry") or "N/A").strip() or "N/A",
     }
 
-@st.cache_data(ttl=180, show_spinner=False)   # 3-minute cache
-def _bulk_fetch(tickers: tuple) -> tuple[dict, str, float]:
+def _items_from_json(payload) -> list:
+    """Flatten various API response shapes into a list of dicts."""
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("data", "equities", "stocks", "items", "results", "live"):
+            v = payload.get(key)
+            if isinstance(v, list):
+                return v
+        # Maybe the dict itself IS the ticker map: {"GCB": {...}, "MTNGH": {...}}
+        if all(isinstance(v, dict) for v in payload.values()):
+            out = []
+            for k, v in payload.items():
+                v.setdefault("name", k)
+                out.append(v)
+            return out
+    return []
+
+def _get(url: str, timeout: int = 12, verify: bool = True) -> requests.Response | None:
+    """Try each header set; return first successful response or None."""
+    for hdrs in _REQ_HEADERS:
+        try:
+            r = requests.get(url, headers=hdrs, timeout=timeout, verify=verify)
+            if r.status_code == 200:
+                return r
+        except requests.exceptions.SSLError:
+            try:
+                r = requests.get(url, headers=hdrs, timeout=timeout, verify=False)
+                if r.status_code == 200:
+                    return r
+            except Exception:
+                continue
+        except Exception:
+            continue
+    return None
+
+# ── Strategy 1 + 2: JSON API ──────────────────────────────────────────────────
+def _strategy_json_bulk(norm_map: dict, wanted: set, log: list) -> dict:
+    results = {}
+    r = _get(_GSE_LIVE)
+    if r is None:
+        log.append(("❌", "GSE bulk JSON", f"No response from {_GSE_LIVE}"))
+        return results
+    try:
+        items = _items_from_json(r.json())
+    except Exception as exc:
+        log.append(("❌", "GSE bulk JSON", f"JSON parse error: {exc} | raw: {r.text[:200]}"))
+        return results
+    if not items:
+        log.append(("⚠️", "GSE bulk JSON", f"Parsed 0 items. Raw snippet: {r.text[:300]}"))
+        return results
+    for item in items:
+        sym = _norm(item.get("name") or item.get("ticker") or
+                    item.get("symbol") or item.get("code") or "")
+        if sym not in wanted:
+            continue
+        parsed = _parse_item(item)
+        if parsed:
+            results[norm_map[sym]] = parsed
+    log.append(("✅" if results else "⚠️", "GSE bulk JSON",
+                f"{len(results)}/{len(wanted)} tickers matched from {len(items)} items"))
+    return results
+
+
+def _strategy_json_perticker(norm_map: dict, still_needed: set, log: list) -> dict:
+    if not still_needed:
+        return {}
+    results = {}
+
+    def _one(sym_norm: str):
+        orig = norm_map[sym_norm]
+        for variant in [orig, orig.lower(), sym_norm, sym_norm.lower()]:
+            url = _GSE_EQUITY.format(t=variant)
+            r = _get(url, timeout=8)
+            if r is None:
+                continue
+            try:
+                payload = r.json()
+                item = payload if isinstance(payload, dict) else {}
+                if "data" in item and isinstance(item["data"], dict):
+                    item = item["data"]
+                parsed = _parse_item(item)
+                if parsed:
+                    return orig, parsed, url
+            except Exception:
+                continue
+        return orig, None, None
+
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {pool.submit(_one, sym): sym for sym in still_needed}
+        ok = fail = 0
+        for future in as_completed(futures):
+            orig, parsed, url = future.result()
+            if parsed:
+                results[orig] = parsed
+                ok += 1
+            else:
+                fail += 1
+    log.append(("✅" if ok else "❌", "GSE per-ticker JSON",
+                f"{ok} fetched, {fail} failed from /apis/gse/equities/{{ticker}}"))
+    return results
+
+
+# ── Strategy 3: AFX HTML (robust multi-selector) ──────────────────────────────
+def _parse_afx_html(html: str, norm_map: dict, wanted: set, log: list) -> dict:
     """
-    Returns (prices_dict, source_label, fetch_timestamp).
-    prices_dict = { ticker: { price, change_abs, change_pct, pe, div_yield, sector } }
+    Try several CSS/structural approaches to extract the GSE price table.
+    Resilient to column reordering and class changes.
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        log.append(("❌", "AFX HTML", "beautifulsoup4 not installed"))
+        return {}
+
+    results = {}
+    soup    = BeautifulSoup(html, "html.parser")
+
+    # Find ALL tables on the page
+    tables = soup.find_all("table")
+    if not tables:
+        log.append(("❌", "AFX HTML", "No <table> elements found in page"))
+        return {}
+
+    for tbl in tables:
+        # Read header row
+        head_cells = tbl.find("thead")
+        if head_cells:
+            headers = [th.get_text(" ", strip=True).lower()
+                       for th in head_cells.find_all(["th", "td"])]
+        else:
+            first_row = tbl.find("tr")
+            if not first_row:
+                continue
+            headers = [c.get_text(" ", strip=True).lower()
+                       for c in first_row.find_all(["th", "td"])]
+
+        # Identify columns flexibly
+        def _col(keywords):
+            for i, h in enumerate(headers):
+                if any(k in h for k in keywords):
+                    return i
+            return None
+
+        ti = _col(["ticker", "symbol", "code", "stock", "company"])
+        pi = _col(["price", "close", "last", "value"])
+        ci = _col(["change", "chg", "delta", "diff"])
+
+        if ti is None or pi is None:
+            continue  # not a price table
+
+        tbody = tbl.find("tbody") or tbl
+        for row in tbody.find_all("tr"):
+            cells = row.find_all(["td", "th"])
+            if len(cells) <= max(ti, pi):
+                continue
+            sym = _norm(cells[ti].get_text(strip=True))
+            if sym not in wanted:
+                continue
+            price = _float(cells[pi].get_text(strip=True))
+            if not price or price <= 0:
+                continue
+            chg = (_float(cells[ci].get_text(strip=True))
+                   if ci is not None and len(cells) > ci else 0.0) or 0.0
+            prev = price - chg
+            results[norm_map[sym]] = {
+                "price":      price,
+                "change_abs": chg,
+                "change_pct": round((chg / prev * 100) if prev else 0.0, 4),
+                "pe": None, "div_yield": None, "sector": "N/A",
+            }
+
+        if results:
+            break  # found the right table
+
+    log.append(("✅" if results else "⚠️", "AFX HTML scrape",
+                f"{len(results)}/{len(wanted)} tickers matched"))
+    return results
+
+
+def _strategy_afx_html(norm_map: dict, still_needed: set, log: list) -> dict:
+    r = _get(_AFX_URL, timeout=14)
+    if r is None:
+        log.append(("❌", "AFX HTML fetch", f"No response from {_AFX_URL}"))
+        return {}
+    return _parse_afx_html(r.text, norm_map, still_needed, log)
+
+
+# ── Strategy 4: user-pasted JSON / CSV ───────────────────────────────────────
+def _parse_pasted(text: str, norm_map: dict, wanted: set, log: list) -> dict:
+    """
+    Accept either:
+      • JSON array/object (from the GSE API copied in browser)
+      • CSV with columns: ticker,price[,change]
+    """
+    results = {}
+    text = text.strip()
+    if not text:
+        return results
+
+    # Try JSON first
+    try:
+        payload = __import__("json").loads(text)
+        items   = _items_from_json(payload)
+        for item in items:
+            sym = _norm(item.get("name") or item.get("ticker") or
+                        item.get("symbol") or item.get("code") or "")
+            if sym not in wanted:
+                continue
+            parsed = _parse_item(item)
+            if parsed:
+                results[norm_map[sym]] = parsed
+        if results:
+            log.append(("✅", "Pasted JSON",
+                        f"{len(results)}/{len(wanted)} tickers from pasted JSON"))
+            return results
+    except Exception:
+        pass
+
+    # Try CSV (ticker,price[,change])
+    for line in text.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 2:
+            continue
+        sym = _norm(parts[0])
+        if sym not in wanted:
+            continue
+        price = _float(parts[1])
+        if not price or price <= 0:
+            continue
+        chg = _float(parts[2]) if len(parts) > 2 else 0.0
+        prev = price - (chg or 0)
+        results[norm_map[sym]] = {
+            "price": price, "change_abs": chg or 0.0,
+            "change_pct": round(((chg / prev) * 100) if prev and chg else 0.0, 4),
+            "pe": None, "div_yield": None, "sector": "N/A",
+        }
+    if results:
+        log.append(("✅", "Pasted CSV",
+                    f"{len(results)}/{len(wanted)} tickers from pasted CSV"))
+    else:
+        log.append(("⚠️", "Pasted data", "Could not parse as JSON or CSV"))
+    return results
+
+
+# ── Master fetch function (cached) ────────────────────────────────────────────
+@st.cache_data(ttl=180, show_spinner=False)
+def _cached_fetch(tickers: tuple, paste_key: str) -> tuple[dict, str, float, list]:
+    """
+    Returns (prices, source, timestamp, debug_log).
+    paste_key is a hash of pasted text so the cache busts when user changes it.
     """
     norm_map = {_norm(t): t for t in tickers}
     wanted   = set(norm_map)
     results  = {}
-    source   = "statement"
+    log      = []
     ts       = time.time()
 
-    # ── LAYER 1: bulk live endpoint ──────────────────────────────────────────
-    try:
-        r = requests.get(GSE_LIVE_URL, headers=_HEADERS, timeout=12)
-        if r.status_code == 200:
-            data = r.json()
-            # The API returns a list of objects
-            if isinstance(data, list):
-                items = data
-            elif isinstance(data, dict):
-                items = data.get("data") or data.get("equities") or data.get("stocks") or list(data.values())
-            else:
-                items = []
-            for item in items:
-                sym = _norm(item.get("name") or item.get("ticker") or item.get("symbol") or "")
-                if sym not in wanted:
-                    continue
-                parsed = _parse_equity_item(item, norm_map[sym])
-                if parsed:
-                    results[norm_map[sym]] = parsed
-    except Exception:
-        pass
+    # Check for user-pasted data first (highest priority override)
+    paste_text = st.session_state.get("_price_paste", "").strip()
+    if paste_text:
+        pasted = _parse_pasted(paste_text, norm_map, wanted, log)
+        results.update(pasted)
 
     still_needed = wanted - {_norm(k) for k in results}
-
-    # ── LAYER 2: per-ticker concurrent fallback ───────────────────────────────
     if still_needed:
-        def _fetch_one(ticker_norm: str):
-            orig = norm_map[ticker_norm]
-            for variant in [orig, ticker_norm, ticker_norm.lower()]:
-                try:
-                    url = GSE_EQUITY_URL.format(ticker=variant)
-                    r = requests.get(url, headers=_HEADERS, timeout=8)
-                    if r.status_code == 200:
-                        payload = r.json()
-                        # payload can be the object itself or wrapped
-                        item = payload if isinstance(payload, dict) else {}
-                        if "data" in item:
-                            item = item["data"]
-                        parsed = _parse_equity_item(item, orig)
-                        if parsed:
-                            return orig, parsed
-                except Exception:
-                    continue
-            return orig, None
+        bulk = _strategy_json_bulk(norm_map, still_needed, log)
+        results.update(bulk)
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            futures = {pool.submit(_fetch_one, sym): sym for sym in still_needed}
-            for future in as_completed(futures):
-                orig, parsed = future.result()
-                if parsed:
-                    results[orig] = parsed
+    still_needed = wanted - {_norm(k) for k in results}
+    if still_needed:
+        per = _strategy_json_perticker(norm_map, still_needed, log)
+        results.update(per)
 
-    if results:
-        source = "live" if len(results) == len(tickers) else "partial"
+    still_needed = wanted - {_norm(k) for k in results}
+    if still_needed:
+        html_r = _strategy_afx_html(norm_map, still_needed, log)
+        results.update(html_r)
 
-    return results, source, ts
+    if not log:
+        log.append(("❌", "All strategies", "No strategy produced any data"))
+
+    source = "live" if len(results) == len(tickers) else "partial" if results else "statement"
+    return results, source, ts, log
 
 
-def get_live_prices(tickers: tuple) -> tuple[dict, str, float]:
-    """Public entry-point. Returns (prices, source, timestamp)."""
-    return _bulk_fetch(tickers)
+def get_live_prices(tickers: tuple) -> tuple[dict, str, float, list]:
+    """Public entry-point. Returns (prices, source, timestamp, debug_log)."""
+    paste_text = st.session_state.get("_price_paste", "")
+    paste_key  = str(hash(paste_text))
+    return _cached_fetch(tickers, paste_key)
 
 
 def inject_live_prices(equities: list, live: dict) -> list:
@@ -854,8 +1080,9 @@ def chart_sector_donut(eq):
         textfont=dict(size=11, family="Inter"),
         hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f} (%{percent})<extra></extra>",
     ))
-    fig.update_layout(title="Holdings by Sector", **_plotly_base(), height=300,
-                      margin=dict(l=16, r=16, t=48, b=16))
+    base = _plotly_base()
+    base["margin"] = dict(l=16, r=16, t=48, b=16)
+    fig.update_layout(title="Holdings by Sector", height=300, **base)
     return fig
 
 def chart_rolling_return(txs, eq, total_value):
@@ -894,23 +1121,60 @@ def render_sidebar():
             unsafe_allow_html=True,
         )
         st.markdown(
-            f"<div style='font-size:.78rem;color:{T.TEXT2};line-height:1.65;'>"
-            f"<b style='color:{GREEN}'>Layer 1</b> — Bulk live API<br>"
-            f"<b style='color:{AMBER}'>Layer 2</b> — Per-ticker API (concurrent)<br>"
-            f"<b style='color:{PURPLE}'>Layer 3</b> — Manual override<br>"
-            f"<span style='color:{T.MUTED}'>No HTML scraping — never breaks.</span>"
+            f"<div style='font-size:.76rem;color:{T.TEXT2};line-height:1.8;'>"
+            f"<b style='color:{GREEN}'>S1</b> · Bulk JSON API (fast)<br>"
+            f"<b style='color:{TEAL}'>S2</b> · Per-ticker JSON (concurrent)<br>"
+            f"<b style='color:{AMBER}'>S3</b> · AFX HTML (robust scrape)<br>"
+            f"<b style='color:{PURPLE}'>S4</b> · Paste JSON/CSV below"
             f"</div>",
             unsafe_allow_html=True,
         )
         st.divider()
-        if st.button("🔄 Refresh Live Prices", use_container_width=True, type="primary"):
+
+        # ── Paste-data fallback ──────────────────────────────────────────────
+        st.markdown(
+            f"<div style='font-size:.68rem;color:{T.MUTED};font-weight:700;"
+            f"text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;'>"
+            f"📋 Paste prices (S4 fallback)</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<div style='font-size:.71rem;color:{T.MUTED};line-height:1.55;margin-bottom:8px;'>"
+            f"Open <a href='https://dev.kwayisi.org/apis/gse/live' target='_blank' "
+            f"style='color:{PURPLE};'>this link</a> in your browser, "
+            f"copy all the JSON text, and paste it here.<br><br>"
+            f"Or paste CSV rows: <code>TICKER,PRICE,CHANGE</code>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        paste = st.text_area(
+            "Paste JSON or CSV",
+            value=st.session_state.get("_price_paste", ""),
+            height=110,
+            placeholder='[{"name":"GCB","price":5.12,"change":0.02}, ...]',
+            label_visibility="collapsed",
+            key="_paste_input",
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ Use data", use_container_width=True, type="primary"):
+                st.session_state["_price_paste"] = paste
+                st.cache_data.clear()
+                st.rerun()
+        with c2:
+            if st.button("🗑 Clear", use_container_width=True):
+                st.session_state["_price_paste"] = ""
+                st.cache_data.clear()
+                st.rerun()
+
+        st.divider()
+        if st.button("🔄 Refresh Live Prices", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
         st.divider()
         st.markdown(
-            f"<div style='font-size:.72rem;color:{T.MUTED};line-height:1.7;'>"
+            f"<div style='font-size:.7rem;color:{T.MUTED};line-height:1.7;'>"
             f"IC Portfolio Analyser · Ultra Edition<br>"
-            f"Data via dev.kwayisi.org/apis/gse<br>"
             f"For informational purposes only.</div>",
             unsafe_allow_html=True,
         )
@@ -980,20 +1244,40 @@ def main():
     # ── LIVE PRICES ───────────────────────────────────────────────────────────
     tickers = tuple(e["ticker"] for e in eq)
     with st.spinner("📡 Fetching live prices…"):
-        live, price_source, price_ts = get_live_prices(tickers)
+        live, price_source, price_ts, price_log = get_live_prices(tickers)
 
     eq = inject_live_prices(eq, live)
     n_live = sum(1 for e in eq if e["live_price"] is not None)
 
-    age_sec  = time.time() - price_ts
-    age_str  = f"{int(age_sec//60)}m {int(age_sec%60)}s ago"
+    age_sec = time.time() - price_ts
+    age_str = f"{int(age_sec//60)}m {int(age_sec%60)}s ago"
 
     if price_source == "live":
-        st.success(f"📡 All {n_live} prices live from GSE-API · refreshed {age_str}")
+        st.success(f"📡 All {n_live} prices live · refreshed {age_str}")
     elif price_source == "partial":
-        st.warning(f"📡 {n_live}/{len(eq)} prices live · {len(eq)-n_live} using statement price · {age_str}")
+        st.warning(f"📡 {n_live}/{len(eq)} live prices · {len(eq)-n_live} using statement price · {age_str}")
     else:
-        st.info("📋 Showing statement prices (GSE-API unavailable) — use manual override below")
+        st.error(
+            "⚠️ All 4 price strategies failed — showing statement prices.  \n"
+            "**Fix:** Open the 👈 sidebar, visit the link, copy the JSON and paste it in."
+        )
+
+    # Debug expander — always visible so user can diagnose
+    with st.expander("🔍 Price fetch diagnostics", expanded=(price_source == "statement")):
+        if price_log:
+            for emoji, strategy, detail in price_log:
+                st.markdown(
+                    f"<div style='font-size:.8rem;padding:4px 0;'>"
+                    f"<b>{emoji} {strategy}</b> — <span style='color:{T.MUTED}'>{detail}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.caption("No log entries (price fetch not yet run).")
+        st.caption(
+            "If all strategies fail: open the sidebar → paste the JSON from "
+            "https://dev.kwayisi.org/apis/gse/live into the text box."
+        )
 
     # ── MANUAL OVERRIDE ───────────────────────────────────────────────────────
     with st.expander("✏️ Override prices manually", expanded=False):
