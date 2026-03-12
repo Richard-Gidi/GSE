@@ -1057,7 +1057,7 @@ def main():
         st.markdown(f"<div class='hero-badge'>IC Securities · Ghana Stock Exchange</div>"
                     f"<div class='hero'>IC Portfolio Analyser</div>"
                     f"<div class='hero-sub'>"
-                    f"Upload your statement · Live GSE prices · AI insights · Health score · Sector analysis"
+                    f"Upload your statement · Live GSE prices  · Health score · Sector analysis"
                     f"</div>", unsafe_allow_html=True)
 
     # ── Upload ────────────────────────────────────────────────────────────────
@@ -1200,7 +1200,7 @@ def main():
         "⚖️ Risk & Scenarios",
         "💸 Cash Flow",
         "📋 Holdings",
-        "🤖 AI Insights",
+        
     ])
 
     # ═══════════════════════════════════════════════════════════════════════════
