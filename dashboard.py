@@ -1061,9 +1061,12 @@ def chart_risk_return_scatter(eq, ev):
                            "Weight: %{x:.1f}%<br>Return: %{y:+.1f}%<br>"
                            "MV: GHS %{customdata[0]:,.2f}<extra></extra>")))
     fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",line_width=1)
-    fig.add_vline(x=ew,line_color=GOLD,line_dash="dot",line_width=1,
-                  annotation_text=f" Equal weight ({ew:.1f}%)",
-                  annotation_font=dict(color=GOLD,size=9,family="DM Mono"))
+    fig.add_vline(x=ew,line_color=GOLD,line_dash="dot",line_width=1)
+    fig.add_annotation(
+        x=ew, y=1, xref='x', yref='paper',
+        text=f" Equal weight ({ew:.1f}%)", showarrow=False,
+        xanchor='left', yanchor='top',
+        font=dict(color=GOLD,size=9,family="DM Mono"))
     fig.update_layout(**T(title="Risk / Return Matrix — Bubble size = Market Value",
                           xt="Portfolio Weight (%)", yt="Return (%)"), height=440)
     return fig
@@ -1179,9 +1182,12 @@ def chart_cumulative(txs, tv):
     fig.add_trace(go.Scatter(x=df["date"],y=df["cumul"],mode="lines",fill="tozeroy",
         fillcolor="rgba(232,180,56,0.08)",line=dict(color=GOLD,width=2.5),name="Net Invested",
         hovertemplate="%{x|%b %d, %Y}<br>Invested: GHS %{y:,.2f}<extra></extra>"))
-    fig.add_hline(y=tv,line_color=EMERALD,line_dash="dash",line_width=2,
-                  annotation_text=f" Portfolio Value GHS {tv:,.0f}",
-                  annotation_font=dict(color=EMERALD,size=10,family="DM Mono"))
+    fig.add_hline(y=tv,line_color=EMERALD,line_dash="dash",line_width=2)
+    fig.add_annotation(
+        x=1, y=tv, xref='paper', yref='y',
+        text=f" Portfolio Value GHS {tv:,.0f}", showarrow=False,
+        xanchor='right', yanchor='bottom',
+        font=dict(color=EMERALD,size=10,family="DM Mono"))
     fig.update_layout(**T(title=f"Net Invested vs Current Value ({'+'if profit>=0 else ''}GHS {profit:,.0f} unrealised)",
                           xt="Date",yt="GHS"), height=320)
     return fig
@@ -1281,12 +1287,18 @@ def chart_projection(df_proj, current_value, target_value, hit_date):
     fig.add_trace(go.Scatter(x=dates_fwd, y=df_proj["base"].tolist(), mode="lines",
         name="Base (current CAGR)", line=dict(color=GOLD, width=3),
         hovertemplate="%{x}<br>Base: GHS %{y:,.0f}<extra></extra>"))
-    fig.add_hline(y=current_value, line_color=VIOLET, line_dash="dash", line_width=1,
-                  annotation_text=" Current",
-                  annotation_font=dict(color=VIOLET, size=9, family="DM Mono"))
-    fig.add_hline(y=target_value, line_color=GOLD, line_dash="dash", line_width=2,
-                  annotation_text=f" Target GHS {target_value:,.0f}",
-                  annotation_font=dict(color=GOLD, size=10, family="DM Mono"))
+    fig.add_hline(y=current_value, line_color=VIOLET, line_dash="dash", line_width=1)
+    fig.add_annotation(
+        x=1, y=current_value, xref='paper', yref='y',
+        text=" Current", showarrow=False,
+        xanchor='right', yanchor='bottom',
+        font=dict(color=VIOLET, size=9, family="DM Mono"))
+    fig.add_hline(y=target_value, line_color=GOLD, line_dash="dash", line_width=2)
+    fig.add_annotation(
+        x=1, y=target_value, xref='paper', yref='y',
+        text=f" Target GHS {target_value:,.0f}", showarrow=False,
+        xanchor='right', yanchor='bottom',
+        font=dict(color=GOLD, size=10, family="DM Mono"))
     if hit_date:
         # add_vline with annotation triggers Plotly's internal _mean() on x values
         # which crashes on date axes (Timestamp arithmetic error).
@@ -1342,9 +1354,12 @@ def chart_real_vs_nominal(m):
         textfont=dict(color=p.TEXT2, size=12, family="DM Mono"),
         hovertemplate="%{x}: %{y:+.2f}%<extra></extra>"))
     fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.add_hline(y=avg_cpi, line_color=RUBY, line_dash="dot", line_width=1,
-                  annotation_text=f" Inflation hurdle {avg_cpi:.1f}%",
-                  annotation_font=dict(color=RUBY, size=9, family="DM Mono"))
+    fig.add_hline(y=avg_cpi, line_color=RUBY, line_dash="dot", line_width=1)
+    fig.add_annotation(
+        x=1, y=avg_cpi, xref='paper', yref='y',
+        text=f" Inflation hurdle {avg_cpi:.1f}%", showarrow=False,
+        xanchor='right', yanchor='bottom',
+        font=dict(color=RUBY, size=9, family="DM Mono"))
     fig.update_layout(**T(title=f"Nominal vs Real Returns — Ghana CPI {avg_cpi:.1f}% avg",
                           yt="Annual Return (%)"), height=340)
     return fig
