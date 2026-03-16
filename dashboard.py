@@ -738,9 +738,14 @@ def project_portfolio(current_value, cagr_pct, target_value, years_max=20):
             "bear":  current_value * (1+bear)**yr,
         })
     df = pd.DataFrame(rows)
-    # Find when base crosses target
+    # Find when base crosses target — coerce to plain Python datetime so
+    # Plotly add_vline never receives a pandas Timestamp (causes TypeError)
     hits = df[df["base"] >= target_value]
-    hit_date = hits.iloc[0]["date"] if not hits.empty else None
+    if not hits.empty:
+        raw = hits.iloc[0]["date"]
+        hit_date = raw.to_pydatetime() if hasattr(raw, "to_pydatetime") else raw
+    else:
+        hit_date = None
     return df, hit_date
 
 
@@ -1260,30 +1265,46 @@ def chart_monthly_heatmap(txs):
 
 def chart_projection(df_proj, current_value, target_value, hit_date):
     p  = th()
+    # Plotly add_vline requires a string x value for date axes — convert everything upfront
+    dates_fwd = df_proj["date"].apply(lambda d: d.strftime("%Y-%m-%d")).tolist()
+    dates_rev = df_proj["date"].iloc[::-1].apply(lambda d: d.strftime("%Y-%m-%d")).tolist()
     fig = go.Figure()
-    # Bear/bull band
     fig.add_trace(go.Scatter(
-        x=pd.concat([df_proj["date"],df_proj["date"].iloc[::-1]]),
-        y=pd.concat([df_proj["bull"],df_proj["bear"].iloc[::-1]]),
-        fill="toself",fillcolor="rgba(232,180,56,0.08)",line=dict(width=0),
-        name="Optimistic–Pessimistic Band",hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=df_proj["date"],y=df_proj["bull"],mode="lines",
-        name="Optimistic (+40% CAGR)",line=dict(color=EMERALD,width=1.5,dash="dot")))
-    fig.add_trace(go.Scatter(x=df_proj["date"],y=df_proj["bear"],mode="lines",
-        name="Pessimistic (−40% CAGR)",line=dict(color=RUBY,width=1.5,dash="dot")))
-    fig.add_trace(go.Scatter(x=df_proj["date"],y=df_proj["base"],mode="lines",
-        name="Base (current CAGR)",line=dict(color=GOLD,width=3),
-        hovertemplate="%{x|%b %Y}<br>Base: GHS %{y:,.0f}<extra></extra>"))
-    fig.add_hline(y=current_value,line_color=VIOLET,line_dash="dash",line_width=1,
-                  annotation_text=" Current",annotation_font=dict(color=VIOLET,size=9,family="DM Mono"))
-    fig.add_hline(y=target_value,line_color=GOLD,line_dash="dash",line_width=2,
+        x=dates_fwd + dates_rev,
+        y=pd.concat([df_proj["bull"], df_proj["bear"].iloc[::-1]]).tolist(),
+        fill="toself", fillcolor="rgba(232,180,56,0.08)", line=dict(width=0),
+        name="Optimistic–Pessimistic Band", hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=dates_fwd, y=df_proj["bull"].tolist(), mode="lines",
+        name="Optimistic (+40% CAGR)", line=dict(color=EMERALD, width=1.5, dash="dot")))
+    fig.add_trace(go.Scatter(x=dates_fwd, y=df_proj["bear"].tolist(), mode="lines",
+        name="Pessimistic (−40% CAGR)", line=dict(color=RUBY, width=1.5, dash="dot")))
+    fig.add_trace(go.Scatter(x=dates_fwd, y=df_proj["base"].tolist(), mode="lines",
+        name="Base (current CAGR)", line=dict(color=GOLD, width=3),
+        hovertemplate="%{x}<br>Base: GHS %{y:,.0f}<extra></extra>"))
+    fig.add_hline(y=current_value, line_color=VIOLET, line_dash="dash", line_width=1,
+                  annotation_text=" Current",
+                  annotation_font=dict(color=VIOLET, size=9, family="DM Mono"))
+    fig.add_hline(y=target_value, line_color=GOLD, line_dash="dash", line_width=2,
                   annotation_text=f" Target GHS {target_value:,.0f}",
-                  annotation_font=dict(color=GOLD,size=10,family="DM Mono"))
+                  annotation_font=dict(color=GOLD, size=10, family="DM Mono"))
     if hit_date:
-        fig.add_vline(x=hit_date,line_color=EMERALD,line_dash="dot",line_width=2,
-                      annotation_text=f" {hit_date.strftime('%b %Y')}",
-                      annotation_font=dict(color=EMERALD,size=10,family="DM Mono"))
-    fig.update_layout(**T(title="Wealth Projection Engine",xt="Date",yt="GHS"),height=420)
+        # add_vline with annotation triggers Plotly's internal _mean() on x values
+        # which crashes on date axes (Timestamp arithmetic error).
+        # Safe fix: add_shape (no annotation math) + add_annotation separately.
+        hit_str = (hit_date.strftime("%Y-%m-%d")
+                   if hasattr(hit_date, "strftime")
+                   else str(hit_date)[:10])
+        hit_label = (hit_date.strftime("%b %Y")
+                     if hasattr(hit_date, "strftime")
+                     else hit_str[:7])
+        fig.add_shape(type="line", x0=hit_str, x1=hit_str, y0=0, y1=1,
+                      xref="x", yref="paper",
+                      line=dict(color=EMERALD, width=2, dash="dot"))
+        fig.add_annotation(x=hit_str, y=1, xref="x", yref="paper",
+                           text=f" {hit_label}", showarrow=False,
+                           xanchor="left", yanchor="top",
+                           font=dict(color=EMERALD, size=10, family="DM Mono"))
+    fig.update_layout(**T(title="Wealth Projection Engine", xt="Date", yt="GHS"), height=420)
     return fig
 
 def chart_fees_over_time(fee_rows):
