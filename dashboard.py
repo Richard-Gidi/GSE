@@ -703,8 +703,7 @@ def chart_performance_attribution(eq, equities_val):
     ))
     fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
     fig.update_layout(
-        title="Performance Attribution — % contribution of each stock to portfolio P&L",
-        **T(xt="Contribution (% of equity value)"), height=380)
+        **T(title="Performance Attribution — % contribution of each stock to portfolio P&L", xt="Contribution (% of equity value)"), height=380)
     return fig
 
 
@@ -724,11 +723,10 @@ def chart_sector_donut(eq):
         sort=False,
     ))
     fig.update_layout(
-        title="Sector Allocation",
         annotations=[dict(text=f"<b>{len(sec_df)}</b><br><span style='font-size:9px'>Sectors</span>",
                           x=0.5, y=0.5, font=dict(size=18, color=p.TEXT, family="DM Mono"),
                           showarrow=False)],
-        **T(), height=340)
+        **T(title="Sector Allocation"), height=340)
     return fig
 
 
@@ -820,8 +818,7 @@ def chart_risk_return_scatter(eq, equities_val):
                            showarrow=False, font=dict(size=8, color=p.MUTED, family="Epilogue"),
                            align="center", opacity=0.6)
     fig.update_layout(
-        title="Risk / Return Matrix — Bubble size = Market Value",
-        **T(xt="Portfolio Weight (%)", yt="Return (%)"), height=440)
+        **T(title="Risk / Return Matrix — Bubble size = Market Value", xt="Portfolio Weight (%)", yt="Return (%)"), height=440)
     return fig
 
 
@@ -940,15 +937,14 @@ def chart_monthly_cashflow_heatmap(txs):
                       outlinecolor=p.BORDER, outlinewidth=1,
                       title=dict(text="GHS", font=dict(color=p.MUTED, size=9))),
     ))
-    fig.update_layout(
-        title="Monthly Net Cash Flow Calendar",
-        xaxis=dict(side="top", gridcolor=p.BORDER, tickcolor=p.MUTED,
-                   tickfont=dict(color=p.TEXT2, family="Epilogue")),
-        yaxis=dict(gridcolor=p.BORDER, tickcolor=p.MUTED,
-                   tickfont=dict(color=p.TEXT2, family="DM Mono")),
-        **{**T(), "margin":dict(l=16,r=16,t=80,b=16)},
-        height=max(200, len(y_vals)*50 + 90),
-    )
+    _hm_layout = T(title="Monthly Net Cash Flow Calendar")
+    _hm_layout["margin"] = dict(l=16, r=16, t=80, b=16)
+    _hm_layout["xaxis"] = dict(side="top", gridcolor=p.BORDER, tickcolor=p.MUTED,
+                                tickfont=dict(color=p.TEXT2, family="Epilogue"))
+    _hm_layout["yaxis"] = dict(gridcolor=p.BORDER, tickcolor=p.MUTED,
+                                tickfont=dict(color=p.TEXT2, family="DM Mono"))
+    _hm_layout["height"] = max(200, len(y_vals)*50 + 90)
+    fig.update_layout(**_hm_layout)
     return fig
 
 
@@ -1004,8 +1000,7 @@ def chart_cumulative(txs, total_value):
                   annotation_text=f" Portfolio Value GHS {total_value:,.0f}",
                   annotation_font=dict(color=EMERALD, size=10, family="DM Mono"))
     fig.update_layout(
-        title=f"Net Invested vs Current Value ({'+'if profit>=0 else ''}GHS {profit:,.0f} unrealised)",
-        **T(xt="Date", yt="GHS"), height=320)
+        **T(title=f"Net Invested vs Current Value ({'+'if profit>=0 else ''}GHS {profit:,.0f} unrealised)", xt="Date", yt="GHS"), height=320)
     return fig
 
 
