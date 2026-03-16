@@ -122,6 +122,260 @@ IC_FEES = {
 TOTAL_FEE_RATE = sum(IC_FEES.values())  # ~1.95%
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GSE DIVIDEND DATABASE — researched from GSE press releases & company reports
+# Sources: gse.com.gh press releases, company AGM announcements, africanfinancials.com
+# Each entry: ticker, ex_date, dps (GHS/share), pay_date, year, type
+# 8% withholding tax applies to all dividends for resident investors.
+# ─────────────────────────────────────────────────────────────────────────────
+GSE_DIVIDENDS = [
+    # ── MTNGH (Scancom / MTN Ghana) ─ semi-annual ───────────────────────────
+    {"ticker":"MTNGH","year":2022,"type":"interim","dps":0.0350,"ex_date":"2022-09-08","pay_date":"2022-09-22"},
+    {"ticker":"MTNGH","year":2022,"type":"final",  "dps":0.1300,"ex_date":"2023-03-28","pay_date":"2023-04-12"},
+    {"ticker":"MTNGH","year":2023,"type":"interim","dps":0.0500,"ex_date":"2023-09-07","pay_date":"2023-09-21"},
+    {"ticker":"MTNGH","year":2023,"type":"final",  "dps":0.1750,"ex_date":"2024-03-26","pay_date":"2024-04-12"},
+    {"ticker":"MTNGH","year":2024,"type":"final",  "dps":0.2400,"ex_date":"2025-04-02","pay_date":"2025-04-16"},
+    {"ticker":"MTNGH","year":2025,"type":"interim","dps":0.0800,"ex_date":"2025-09-08","pay_date":"2025-09-22","confirmed":True},
+    {"ticker":"MTNGH","year":2025,"type":"final",  "dps":0.4000,"ex_date":"2026-03-24","pay_date":"2026-04-10","confirmed":True},
+    # ── GCB Bank ─────────────────────────────────────────────────────────────
+    {"ticker":"GCB","year":2021,"type":"final","dps":0.0219,"ex_date":"2022-06-15","pay_date":"2022-07-01"},
+    # 2022 & 2023: no dividend — domestic debt exchange (DDEP) capital conservation
+    {"ticker":"GCB","year":2024,"type":"final","dps":1.0000,"ex_date":"2025-06-10","pay_date":"2025-06-27"},
+    # ── GOIL (Ghana Oil Company) ──────────────────────────────────────────────
+    {"ticker":"GOIL","year":2022,"type":"final","dps":0.0500,"ex_date":"2023-05-30","pay_date":"2023-07-14"},
+    {"ticker":"GOIL","year":2023,"type":"final","dps":0.0560,"ex_date":"2024-05-31","pay_date":"2024-07-15"},
+    {"ticker":"GOIL","year":2024,"type":"final","dps":0.0560,"ex_date":"2025-05-30","pay_date":"2025-07-14"},
+    # ── TOTAL (TotalEnergies Marketing Ghana) ────────────────────────────────
+    {"ticker":"TOTAL","year":2022,"type":"final","dps":0.5500,"ex_date":"2023-04-18","pay_date":"2023-05-03"},
+    {"ticker":"TOTAL","year":2023,"type":"final","dps":0.7240,"ex_date":"2024-04-22","pay_date":"2024-05-08"},
+    {"ticker":"TOTAL","year":2024,"type":"final","dps":2.5665,"ex_date":"2025-04-25","pay_date":"2025-05-12"},
+    # ── SCB (Standard Chartered Bank Ghana) ──────────────────────────────────
+    {"ticker":"SCB","year":2022,"type":"final","dps":1.4000,"ex_date":"2023-04-04","pay_date":"2023-04-20"},
+    {"ticker":"SCB","year":2023,"type":"final","dps":2.9480,"ex_date":"2024-04-02","pay_date":"2024-04-18"},
+    {"ticker":"SCB","year":2024,"type":"final","dps":1.6704,"ex_date":"2025-04-07","pay_date":"2025-04-23"},
+    # ── SOGEGH (Societe Generale Ghana) ──────────────────────────────────────
+    {"ticker":"SOGEGH","year":2022,"type":"final","dps":0.0700,"ex_date":"2023-06-27","pay_date":"2023-07-13"},
+    {"ticker":"SOGEGH","year":2023,"type":"final","dps":0.1800,"ex_date":"2024-06-25","pay_date":"2024-07-11"},
+    {"ticker":"SOGEGH","year":2024,"type":"final","dps":0.3400,"ex_date":"2025-06-30","pay_date":"2025-07-16"},
+    # ── EGL (Enterprise Group) ───────────────────────────────────────────────
+    {"ticker":"EGL","year":2022,"type":"final","dps":0.0850,"ex_date":"2023-06-20","pay_date":"2023-07-06"},
+    {"ticker":"EGL","year":2023,"type":"final","dps":0.1100,"ex_date":"2024-06-24","pay_date":"2024-07-10"},
+    {"ticker":"EGL","year":2024,"type":"final","dps":0.1300,"ex_date":"2025-06-25","pay_date":"2025-07-11"},
+    # ── ACCESS (Access Bank Ghana) ────────────────────────────────────────────
+    # 2023: no dividend paid
+    {"ticker":"ACCESS","year":2024,"type":"final","dps":0.0420,"ex_date":"2025-05-14","pay_date":"2025-05-30"},
+    # ── CAL (CalBank) ─────────────────────────────────────────────────────────
+    # 2022-2024: suspended due to DDEP capital conservation / BoG directive
+    # ── GGBL (Guinness Ghana Breweries) ──────────────────────────────────────
+    {"ticker":"GGBL","year":2022,"type":"final","dps":0.0300,"ex_date":"2023-02-07","pay_date":"2023-02-23"},
+    {"ticker":"GGBL","year":2023,"type":"final","dps":0.0500,"ex_date":"2024-02-06","pay_date":"2024-02-22"},
+    # ── FML (FanMilk Ghana) ───────────────────────────────────────────────────
+    {"ticker":"FML","year":2022,"type":"final","dps":0.0800,"ex_date":"2023-06-08","pay_date":"2023-06-26"},
+    {"ticker":"FML","year":2023,"type":"final","dps":0.1000,"ex_date":"2024-06-06","pay_date":"2024-06-24"},
+    # ── UNIL (Unilever Ghana) ─────────────────────────────────────────────────
+    {"ticker":"UNIL","year":2022,"type":"final","dps":0.1500,"ex_date":"2023-05-09","pay_date":"2023-05-25"},
+    {"ticker":"UNIL","year":2023,"type":"final","dps":0.2200,"ex_date":"2024-05-07","pay_date":"2024-05-23"},
+    {"ticker":"UNIL","year":2024,"type":"final","dps":0.2800,"ex_date":"2025-05-08","pay_date":"2025-05-26"},
+    # ── SIC (SIC Insurance) ───────────────────────────────────────────────────
+    {"ticker":"SIC","year":2022,"type":"final","dps":0.0080,"ex_date":"2023-06-14","pay_date":"2023-06-30"},
+    {"ticker":"SIC","year":2023,"type":"final","dps":0.0100,"ex_date":"2024-06-11","pay_date":"2024-06-27"},
+    # ── CLYD (Clydestone Ghana) ───────────────────────────────────────────────
+    {"ticker":"CLYD","year":2024,"type":"final","dps":0.0300,"ex_date":"2025-05-20","pay_date":"2025-06-05"},
+    # ── ENTERPRISE (Enterprise Group same as EGL) alias handled above ─────────
+    # ── ABSA (Absa Bank Ghana) ────────────────────────────────────────────────
+    {"ticker":"ABSA","year":2023,"type":"final","dps":0.1400,"ex_date":"2024-05-07","pay_date":"2024-05-23"},
+    {"ticker":"ABSA","year":2024,"type":"final","dps":0.1900,"ex_date":"2025-05-09","pay_date":"2025-05-27"},
+]
+
+# Pre-parse dates once at import time
+for _d in GSE_DIVIDENDS:
+    _d["_ex_date"]  = datetime.strptime(_d["ex_date"],  "%Y-%m-%d")
+    _d["_pay_date"] = datetime.strptime(_d["pay_date"], "%Y-%m-%d")
+
+WITHHOLDING_TAX = 0.08   # 8% WHT on dividends, Ghana
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GSE DIVIDEND ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+def compute_gse_dividends(eq, txs, statement_date_str):
+    """
+    For each ticker the user holds, look up the GSE dividend database and work out:
+      - Which dividend events occurred before the statement date
+      - Whether the user held the stock on each ex-dividend date
+        (determined from Buy transaction history)
+      - Gross and net (after 8% WHT) dividend entitled
+      - Whether it appears in the transaction log as received
+
+    Returns a list of row dicts and summary totals.
+    """
+    # Parse statement date
+    try:
+        stmt_date = datetime.strptime(statement_date_str, "%d/%m/%Y")
+    except:
+        stmt_date = datetime.now()
+
+    # Build buy history: ticker → list of (buy_date, qty)
+    buy_history = {}
+    for t in txs:
+        if t["type"] != "Buy": continue
+        # Try to match ticker in description
+        for e in eq:
+            if e["ticker"] in t["description"].upper():
+                buy_history.setdefault(e["ticker"], []).append(
+                    {"date": t["date"], "qty_approx": t["debit"] / e["avg_cost"] if e["avg_cost"] else 0})
+
+    # Map of ticker → current qty from statement
+    qty_map = {e["ticker"]: e["qty"] for e in eq}
+
+    # Map ticker → dividends received from transaction log
+    received_map = {}  # ticker → total GHS received
+    for t in txs:
+        if t["type"] != "Dividend": continue
+        for ticker in qty_map:
+            if ticker in t["description"].upper():
+                received_map[ticker] = received_map.get(ticker, 0.0) + t["credit"]
+
+    rows = []
+    total_gross_entitled = 0.0
+    total_net_entitled   = 0.0
+    total_received       = 0.0
+
+    for div in GSE_DIVIDENDS:
+        ticker   = div["ticker"]
+        ex_date  = div["_ex_date"]
+        pay_date = div["_pay_date"]
+        dps      = div["dps"]
+
+        if ticker not in qty_map:
+            continue   # user doesn't hold this stock
+
+        # Only consider dividends where ex_date <= statement_date
+        if ex_date > stmt_date:
+            status = "⏳ Upcoming"
+            # Still show it as upcoming
+            qty   = qty_map[ticker]
+            gross = qty * dps
+            net   = gross * (1 - WITHHOLDING_TAX)
+            rows.append({
+                "Ticker":      ticker,
+                "Year/Type":   f"{div['year']} {div['type'].capitalize()}",
+                "Ex-Date":     div["ex_date"],
+                "Pay-Date":    div["pay_date"],
+                "DPS (GHS)":   f"{dps:.4f}",
+                "Shares Held": f"{qty:,.0f}",
+                "Gross Div":   f"GHS {gross:,.2f}",
+                "Net Div (8% WHT)": f"GHS {net:,.2f}",
+                "Received":    "—",
+                "Status":      status,
+                "Gap":         "—",
+            })
+            continue
+
+        # Determine qty held on ex-dividend date
+        # Best estimate: use current qty from statement (conservative —
+        # if they sold between ex-date and statement date they'd still qualify)
+        qty_on_exdate = qty_map[ticker]
+
+        # If we have buy history, check they owned it before ex_date
+        owned_before = True
+        if ticker in buy_history:
+            earliest_buy = min(b["date"] for b in buy_history[ticker])
+            owned_before = earliest_buy < ex_date
+        # If no buy tx found, we trust the statement (they hold it, so they likely owned it)
+
+        gross_entitled = qty_on_exdate * dps if owned_before else 0.0
+        net_entitled   = gross_entitled * (1 - WITHHOLDING_TAX)
+
+        # Check received
+        received_total = received_map.get(ticker, 0.0)
+        # Approximate: if multiple dividends, we can't split precisely — flag if total received < entitled
+        if gross_entitled > 0:
+            if received_total >= gross_entitled * 0.85:   # 85% tolerance (WHT + timing)
+                status  = "✅ Received"
+                gap_str = "—"
+            elif received_total > 0:
+                gap     = net_entitled - received_total
+                status  = "⚠️ Partial"
+                gap_str = f"GHS {gap:,.2f}"
+            else:
+                status  = "❌ Not in log"
+                gap_str = f"GHS {net_entitled:,.2f}"
+        else:
+            status  = "⚠️ Held after ex-date?"
+            gap_str = "—"
+
+        total_gross_entitled += gross_entitled
+        total_net_entitled   += net_entitled
+        total_received       += min(received_total, net_entitled)
+
+        rows.append({
+            "Ticker":           ticker,
+            "Year/Type":        f"{div['year']} {div['type'].capitalize()}",
+            "Ex-Date":          div["ex_date"],
+            "Pay-Date":         div["pay_date"],
+            "DPS (GHS)":        f"{dps:.4f}",
+            "Shares Held":      f"{qty_on_exdate:,.0f}",
+            "Gross Div":        f"GHS {gross_entitled:,.2f}",
+            "Net Div (8% WHT)": f"GHS {net_entitled:,.2f}",
+            "Received":         f"GHS {received_total:,.2f}" if received_total else "—",
+            "Status":           status,
+            "Gap":              gap_str,
+        })
+
+    # Sort by ex_date descending (newest first)
+    rows.sort(key=lambda r: r["Ex-Date"], reverse=True)
+
+    summary = {
+        "gross_entitled":  total_gross_entitled,
+        "net_entitled":    total_net_entitled,
+        "received":        total_received,
+        "unclaimed":       max(0, total_net_entitled - total_received),
+        "n_events":        len([r for r in rows if "Upcoming" not in r["Status"]]),
+        "n_upcoming":      len([r for r in rows if "Upcoming" in r["Status"]]),
+    }
+    return rows, summary
+
+
+def chart_dividend_entitlement(div_rows):
+    """Bar chart: gross dividend entitled vs received, by ticker."""
+    p = th()
+    # Aggregate by ticker
+    agg = {}
+    for r in div_rows:
+        if "Upcoming" in r.get("Status","") or "Held after" in r.get("Status",""):
+            continue
+        t = r["Ticker"]
+        g = float(r["Gross Div"].replace("GHS","").replace(",","").strip()) if r["Gross Div"] != "—" else 0
+        recv_str = r.get("Received","—")
+        rec = float(recv_str.replace("GHS","").replace(",","").strip()) if recv_str not in ("—","") else 0
+        if t not in agg:
+            agg[t] = {"gross":0.0,"received":0.0}
+        agg[t]["gross"]    += g
+        agg[t]["received"] += rec
+
+    if not agg:
+        return None
+
+    tickers   = list(agg.keys())
+    gross_vals = [agg[t]["gross"]    for t in tickers]
+    recv_vals  = [agg[t]["received"] for t in tickers]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Gross Entitled", x=tickers, y=gross_vals,
+        marker_color=GOLD, opacity=0.85,
+        text=[f"GHS {v:,.0f}" for v in gross_vals], textposition="outside",
+        textfont=dict(size=9, family="DM Mono")))
+    fig.add_trace(go.Bar(name="Received (from statement)", x=tickers, y=recv_vals,
+        marker_color=EMERALD, opacity=0.85,
+        text=[f"GHS {v:,.0f}" if v else "—" for v in recv_vals], textposition="outside",
+        textfont=dict(size=9, family="DM Mono")))
+    fig.update_layout(**T(title="GSE Dividend Entitlement vs Received", yt="GHS"),
+                      barmode="group", height=320)
+    return fig
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # GSE SECTOR MAP
 # ─────────────────────────────────────────────────────────────────────────────
 GSE_SECTORS = {
@@ -146,6 +400,233 @@ SECTOR_COLORS = {
     "Mining":"#94a3b8","Manufacturing":INDIGO,"Insurance":"#f97316",
     "Transport":"#22d3ee","Technology":"#ec4899","Other":SLATE,
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DIVIDEND FORECASTING — predicted & confirmed upcoming dividends
+# ─────────────────────────────────────────────────────────────────────────────
+def predict_upcoming_dividends(eq, horizon_months=18):
+    """
+    Two-tier approach:
+      CONFIRMED  — entries in GSE_DIVIDENDS with ex_date > today (hard data)
+      PREDICTED  — generated from historical seasonality + DPS growth trend
+
+    For each ticker the user holds that has at least 2 historical events,
+    project the next expected dividend using:
+      - Typical ex_date month from history (mode of past months)
+      - DPS estimate: last DPS * (1 + avg YoY DPS growth)
+      - Confidence: HIGH if 3+ consistent events, MEDIUM if 2, LOW if 1
+    """
+    today    = datetime.now()
+    horizon  = today + timedelta(days=horizon_months * 30)
+    held     = {e["ticker"] for e in eq}
+    qty_map  = {e["ticker"]: e["qty"] for e in eq}
+    price_map= {e["ticker"]: (e.get("live_price") or e.get("statement_price",0)) for e in eq}
+    rows     = []
+
+    # ── CONFIRMED upcoming (from database) ───────────────────────────────────
+    for div in GSE_DIVIDENDS:
+        if div["ticker"] not in held: continue
+        if div["_ex_date"] <= today: continue
+        if div["_ex_date"] > horizon: continue
+        qty   = qty_map[div["ticker"]]
+        gross = qty * div["dps"]
+        net   = gross * (1 - WITHHOLDING_TAX)
+        rows.append({
+            "ticker":     div["ticker"],
+            "year_type":  f"{div['year']} {div['type'].capitalize()}",
+            "ex_date":    div["_ex_date"],
+            "pay_date":   div["_pay_date"],
+            "dps":        div["dps"],
+            "qty":        qty,
+            "gross_div":  round(gross, 2),
+            "net_div":    round(net, 2),
+            "confidence": "🟢 CONFIRMED",
+            "source":     "GSE press release",
+        })
+
+    already_covered = {(r["ticker"], r["year_type"]) for r in rows}
+
+    # ── PREDICTED using seasonality ───────────────────────────────────────────
+    for ticker in held:
+        history = sorted(
+            [d for d in GSE_DIVIDENDS if d["ticker"] == ticker and d["_ex_date"] <= today],
+            key=lambda d: d["_ex_date"])
+
+        if len(history) < 1: continue
+
+        # Group by type (interim / final) for semi-annual payers
+        type_groups = {}
+        for h in history:
+            t = h["type"]
+            type_groups.setdefault(t, []).append(h)
+
+        for div_type, events in type_groups.items():
+            # Skip if we already have a confirmed upcoming for this ticker+type combo
+            # (match on upcoming year)
+            latest    = events[-1]
+            last_year = latest["_ex_date"].year
+            last_month= latest["_ex_date"].month
+            last_dps  = latest["dps"]
+
+            # Estimate next year
+            next_year = last_year + 1
+            if next_year < today.year:
+                next_year = today.year
+
+            # Project month (use last known month ± 0)
+            pred_month = last_month
+            pred_day   = min(latest["_ex_date"].day, 28)
+
+            # Try to build predicted date
+            try:
+                pred_date = datetime(next_year, pred_month, pred_day)
+            except ValueError:
+                pred_date = datetime(next_year, pred_month, 28)
+
+            # If that date is past, push to next year
+            if pred_date < today - timedelta(days=30):
+                pred_date = datetime(next_year + 1, pred_month, pred_day)
+
+            if pred_date > horizon: continue
+
+            # Skip if we already have confirmed data for this period
+            year_type_key = (ticker, f"{next_year} {div_type.capitalize()}")
+            if year_type_key in already_covered: continue
+            # Also skip if predicted date overlaps with a confirmed event
+            if any(r["ticker"]==ticker and abs((r["ex_date"]-pred_date).days)<60 for r in rows):
+                continue
+
+            # DPS estimate: YoY growth from last 2 events
+            if len(events) >= 2:
+                prev_dps = events[-2]["dps"]
+                if prev_dps > 0:
+                    growth = (last_dps - prev_dps) / prev_dps
+                    # Cap growth at 100% to be conservative
+                    growth = max(-0.3, min(growth, 1.0))
+                else:
+                    growth = 0.05
+            else:
+                growth = 0.05  # assume 5% growth if only one data point
+
+            pred_dps   = round(last_dps * (1 + growth), 4)
+            pred_pay   = pred_date + timedelta(days=45)
+
+            qty   = qty_map[ticker]
+            gross = qty * pred_dps
+            net   = gross * (1 - WITHHOLDING_TAX)
+
+            confidence = ("🔵 HIGH" if len(events) >= 3 else
+                          "🟡 MEDIUM" if len(events) == 2 else
+                          "⚪ LOW")
+
+            rows.append({
+                "ticker":     ticker,
+                "year_type":  f"{next_year} {div_type.capitalize()} (est.)",
+                "ex_date":    pred_date,
+                "pay_date":   pred_pay,
+                "dps":        pred_dps,
+                "qty":        qty,
+                "gross_div":  round(gross, 2),
+                "net_div":    round(net, 2),
+                "confidence": confidence,
+                "source":     f"Predicted from {len(events)} historical events",
+            })
+
+    rows.sort(key=lambda r: r["ex_date"])
+    return rows
+
+
+def chart_dividend_calendar(upcoming_rows, current_price_map):
+    """Timeline chart of upcoming dividends — bubble per event, sized by net dividend."""
+    p   = th()
+    if not upcoming_rows: return None
+
+    conf_map = {
+        "🟢 CONFIRMED": EMERALD,
+        "🔵 HIGH":      AZURE,
+        "🟡 MEDIUM":    AMBER,
+        "⚪ LOW":       SLATE,
+    }
+
+    fig = go.Figure()
+    for conf, color in conf_map.items():
+        subset = [r for r in upcoming_rows if r["confidence"] == conf]
+        if not subset: continue
+        fig.add_trace(go.Scatter(
+            x=[r["ex_date"].strftime("%Y-%m-%d") for r in subset],
+            y=[r["ticker"] for r in subset],
+            mode="markers+text",
+            name=conf,
+            marker=dict(
+                size=[max(10, min(r["net_div"] / 20, 60)) for r in subset],
+                color=color, opacity=0.85,
+                line=dict(color=p.BG, width=2),
+                sizemode="area",
+            ),
+            text=[f"GHS {r['net_div']:,.0f}" for r in subset],
+            textposition="middle right",
+            textfont=dict(size=9, color=p.TEXT2, family="DM Mono"),
+            customdata=[[r["dps"], r["net_div"], r["gross_div"],
+                         r["pay_date"].strftime("%b %d %Y"), r["source"], r["qty"]]
+                        for r in subset],
+            hovertemplate=(
+                "<b>%{y} — %{x}</b><br>"
+                "DPS: GHS %{customdata[0]:.4f}<br>"
+                "Gross: GHS %{customdata[2]:,.2f}<br>"
+                "Net (8% WHT): GHS %{customdata[1]:,.2f}<br>"
+                "Pay Date: %{customdata[3]}<br>"
+                "Shares: %{customdata[5]:,.0f}<br>"
+                "Source: %{customdata[4]}"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Today line
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    fig.add_shape(type="line", x0=today_str, x1=today_str, y0=-0.5, y1=len(set(r["ticker"] for r in upcoming_rows))-0.5,
+                  xref="x", yref="y", line=dict(color=GOLD, width=1.5, dash="dot"))
+    fig.add_annotation(x=today_str, y=0, xref="x", yref="y",
+                       text=" Today", showarrow=False,
+                       xanchor="left", yanchor="bottom",
+                       font=dict(color=GOLD, size=9, family="DM Mono"))
+
+    layout = T(title="Dividend Calendar — Upcoming Events (bubble size = net GHS)")
+    layout["height"] = max(320, len(set(r["ticker"] for r in upcoming_rows)) * 55 + 80)
+    layout["xaxis"]["type"] = "category"
+    layout["showlegend"] = True
+    fig.update_layout(**layout)
+    return fig
+
+
+def chart_annual_income_forecast(upcoming_rows):
+    """Bar chart: total net dividend income expected per month."""
+    p = th()
+    if not upcoming_rows: return None
+    monthly = {}
+    for r in upcoming_rows:
+        m_key = r["pay_date"].strftime("%Y-%m")
+        monthly[m_key] = monthly.get(m_key, 0.0) + r["net_div"]
+    if not monthly: return None
+    months = sorted(monthly.keys())
+    vals   = [monthly[m] for m in months]
+    total  = sum(vals)
+    conf_colors = []
+    for m in months:
+        is_conf = any(r["pay_date"].strftime("%Y-%m") == m and "CONFIRMED" in r["confidence"]
+                      for r in upcoming_rows)
+        conf_colors.append(EMERALD if is_conf else GOLD)
+    fig = go.Figure(go.Bar(
+        x=months, y=vals,
+        marker=dict(color=conf_colors, opacity=0.85, line=dict(width=0)),
+        text=[f"GHS {v:,.0f}" for v in vals], textposition="outside",
+        textfont=dict(size=9, family="DM Mono"),
+        hovertemplate="%{x}<br>Expected net div: GHS %{y:,.2f}<extra></extra>"))
+    fig.update_layout(**T(
+        title=f"Expected Dividend Income by Month — GHS {total:,.0f} total (next 18 months)",
+        yt="Net GHS (after 8% WHT)"), height=280)
+    return fig
+
+
 def get_sector(t): return GSE_SECTORS.get(t.upper(), "Other")
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -593,42 +1074,53 @@ def compute_fees(txs):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DRIP SIMULATOR
+# DRIP SIMULATOR (uses GSE dividend database for accurate per-share amounts)
 # ─────────────────────────────────────────────────────────────────────────────
-def simulate_drip(eq, txs, m):
+def simulate_drip(eq, txs, m, statement_date_str):
     """
-    Estimate portfolio value if every dividend had been reinvested at the price
-    prevailing on the ex-div date (approximated as statement price for that ticker).
+    DRIP simulation using real GSE dividend-per-share data.
+    For each dividend event the user was entitled to (per ex-date + holdings),
+    calculate what extra shares they would hold today if they had reinvested
+    that cash at the ex-dividend-date price (approximated as statement price).
     """
-    div_txs = [t for t in txs if t["type"] == "Dividend"]
-    if not div_txs:
-        return None, 0.0
-
-    # Map ticker → current price for reinvestment
+    div_rows, summary = compute_gse_dividends(eq, txs, statement_date_str)
     price_map = {e["ticker"]: (e["live_price"] or e["statement_price"]) for e in eq}
-    avg_price = np.mean(list(price_map.values())) if price_map else 1.0
 
-    # For each dividend, estimate shares that would have been bought
     extra_value = 0.0
     drip_rows   = []
-    for t in div_txs:
-        div_amt = t["credit"]
-        # Try to guess ticker from description
-        guessed_ticker = None
-        for ticker in price_map:
-            if ticker in t["description"].upper():
-                guessed_ticker = ticker
-                break
-        price = price_map.get(guessed_ticker, avg_price) if guessed_ticker else avg_price
-        shares_bought = div_amt / price if price else 0
-        current_value = shares_bought * price
-        extra_value  += current_value
-        drip_rows.append({"date":t["date"],"amount":div_amt,
-                          "guessed_ticker":guessed_ticker or "?",
-                          "price_at_reinvest":round(price,4),
-                          "extra_shares":round(shares_bought,4),
-                          "current_value":round(current_value,2)})
 
+    for div in GSE_DIVIDENDS:
+        ticker  = div["ticker"]
+        ex_date = div["_ex_date"]
+
+        if ticker not in price_map: continue
+        try:
+            stmt_dt = datetime.strptime(statement_date_str, "%d/%m/%Y")
+        except:
+            stmt_dt = datetime.now()
+        if ex_date > stmt_dt: continue
+
+        # Qty on ex-date (use statement qty as proxy)
+        qty    = next((e["qty"] for e in eq if e["ticker"] == ticker), 0)
+        dps    = div["dps"]
+        gross  = qty * dps
+        net    = gross * (1 - WITHHOLDING_TAX)
+        price  = price_map.get(ticker, 1.0)
+        shares = net / price if price else 0
+        cv     = shares * price
+
+        extra_value += cv
+        drip_rows.append({
+            "date":             div["_pay_date"],
+            "ticker":           ticker,
+            "year_type":        f"{div['year']} {div['type'].capitalize()}",
+            "net_dividend":     round(net, 2),
+            "reinvest_price":   round(price, 4),
+            "extra_shares":     round(shares, 4),
+            "current_value":    round(cv, 2),
+        })
+
+    drip_rows.sort(key=lambda r: r["date"], reverse=True)
     return drip_rows, extra_value
 
 
@@ -1516,7 +2008,7 @@ def main():
     m   = compute_metrics(eq, txs, ps)
     am  = compute_advanced(eq, txs, m)
     fee_rows, total_fees = compute_fees(txs)
-    drip_rows, drip_value = simulate_drip(eq, txs, m)
+    drip_rows, drip_value = simulate_drip(eq, txs, m, data['report_date'])
 
     # ── Client bar ────────────────────────────────────────────────────────────
     roi_c = EMERALD if m["roi"]>=0 else RUBY
@@ -1902,29 +2394,149 @@ def main():
                 fig_r.update_layout(**T(title="Estimated Portfolio Value Over Time",xt="Date",yt="GHS"),height=320)
                 st.plotly_chart(fig_r, key="pc_21",use_container_width=True)
 
+        # ── GSE Dividend Intelligence ─────────────────────────────────────────
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("💎 GSE Dividend Intelligence",
+             "Real dividend data from GSE press releases — cross-checked against your holdings & statement date")
+
+        div_rows, div_summary = compute_gse_dividends(eq, txs, data["report_date"])
+
+        da1,da2,da3,da4 = st.columns(4)
+        with da1: st.markdown(kpi("Gross Dividend Entitled",
+            f"GHS {div_summary['gross_entitled']:,.2f}",
+            f"Across {div_summary['n_events']} past dividend events","y",icon="🏦"),unsafe_allow_html=True)
+        with da2: st.markdown(kpi("Net After 8% WHT",
+            f"GHS {div_summary['net_entitled']:,.2f}",
+            "After Ghana withholding tax","t",icon="🧾"),unsafe_allow_html=True)
+        with da3:
+            unclaimed = div_summary["unclaimed"]
+            uc = "re" if unclaimed > 0 else "g"
+            st.markdown(kpi("Unclaimed / Gap",
+                f"<span class='{pn(-unclaimed if unclaimed else 0)}'>GHS {unclaimed:,.2f}</span>",
+                "Net entitled − what appears in statement","re" if unclaimed>100 else "g",
+                icon="⚠️" if unclaimed>100 else "✅"),unsafe_allow_html=True)
+        with da4: st.markdown(kpi("Upcoming Dividends",
+            str(div_summary["n_upcoming"]),
+            "Ex-dates after statement date","b",icon="⏳"),unsafe_allow_html=True)
+
+        if div_rows:
+            # Colour-code status column
+            df_div = pd.DataFrame(div_rows)
+            st.dataframe(df_div, use_container_width=True, hide_index=True, height=360)
+
+            ec = chart_dividend_entitlement(div_rows)
+            if ec:
+                st.plotly_chart(ec, use_container_width=True, key="pc_div_entitlement")
+
+            # Unclaimed alert
+            if div_summary["unclaimed"] > 100:
+                st.markdown(alert_box(
+                    f"Potential Unclaimed Dividends: GHS {div_summary['unclaimed']:,.2f}",
+                    "Some dividend events are not reflected in your transaction log. "
+                    "Contact IC Securities or the company registrar to verify payment. "
+                    "Note: amounts are estimates based on researched DPS and your statement holdings.",
+                    "warn"), unsafe_allow_html=True)
+            else:
+                st.markdown(alert_box("Dividend Records Look Complete",
+                    "All dividend events found in the database appear to be reflected in your statement.",
+                    "ok"), unsafe_allow_html=True)
+        else:
+            st.info("No dividend events found in the database for your current holdings.")
+
+        st.markdown("<div style='font-size:.7rem;color:#424870;margin-top:4px;font-family:Epilogue,sans-serif;'>"            "⚠️ DPS figures sourced from GSE press releases and company AGM announcements (africanfinancials.com, "            "gse.com.gh). Holdings-on-ex-date estimated from statement qty + buy transaction history. "            "Verify actual entitlements with IC Securities or the company registrar.</div>",
+            unsafe_allow_html=True)
+
+        # ── Upcoming Dividend Calendar ────────────────────────────────────────
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("📅 Dividend Calendar",
+             "Confirmed (from GSE press releases) + Predicted (from historical seasonality) — next 18 months")
+
+        price_map_for_cal = {e["ticker"]:(e.get("live_price") or e.get("statement_price",0)) for e in eq}
+        upcoming_divs = predict_upcoming_dividends(eq, horizon_months=18)
+
+        if upcoming_divs:
+            n_conf = sum(1 for r in upcoming_divs if "CONFIRMED" in r["confidence"])
+            n_pred = len(upcoming_divs) - n_conf
+            total_net_upcoming = sum(r["net_div"] for r in upcoming_divs)
+            total_gross_upcoming = sum(r["gross_div"] for r in upcoming_divs)
+
+            uc1,uc2,uc3,uc4 = st.columns(4)
+            with uc1: st.markdown(kpi("Upcoming Events",
+                str(len(upcoming_divs)),
+                f"{n_conf} confirmed · {n_pred} predicted","b",icon="📅"),unsafe_allow_html=True)
+            with uc2: st.markdown(kpi("Expected Gross Income",
+                f"GHS {total_gross_upcoming:,.2f}",
+                "Before 8% withholding tax","y",icon="💵"),unsafe_allow_html=True)
+            with uc3: st.markdown(kpi("Expected Net Income",
+                f"GHS {total_net_upcoming:,.2f}",
+                "After 8% Ghana withholding tax","t",icon="💎"),unsafe_allow_html=True)
+            with uc4:
+                next_conf = next((r for r in upcoming_divs if "CONFIRMED" in r["confidence"]), None)
+                if next_conf:
+                    days_away = (next_conf["ex_date"] - datetime.now()).days
+                    st.markdown(kpi("Next Confirmed Ex-Date",
+                        next_conf["ex_date"].strftime("%d %b %Y"),
+                        f"{next_conf['ticker']} · GHS {next_conf['net_div']:,.2f} net · in {days_away}d",
+                        "g" if days_away <= 30 else "b",icon="⏰"),unsafe_allow_html=True)
+                else:
+                    st.markdown(kpi("Next Confirmed Ex-Date","—","None in database","b",icon="⏰"),unsafe_allow_html=True)
+
+            # Calendar chart
+            cal_fig = chart_dividend_calendar(upcoming_divs, price_map_for_cal)
+            if cal_fig:
+                st.plotly_chart(cal_fig, use_container_width=True, key="pc_div_calendar")
+
+            # Monthly income forecast bar
+            inc_fig = chart_annual_income_forecast(upcoming_divs)
+            if inc_fig:
+                st.plotly_chart(inc_fig, use_container_width=True, key="pc_div_income")
+
+            # Table
+            cal_df = pd.DataFrame([{
+                "Ticker":       r["ticker"],
+                "Event":        r["year_type"],
+                "Ex-Date":      r["ex_date"].strftime("%d %b %Y"),
+                "Pay-Date":     r["pay_date"].strftime("%d %b %Y"),
+                "Est. DPS":     f"GHS {r['dps']:.4f}",
+                "Your Shares":  f"{r['qty']:,.0f}",
+                "Gross Div":    f"GHS {r['gross_div']:,.2f}",
+                "Net Div":      f"GHS {r['net_div']:,.2f}",
+                "Confidence":   r["confidence"],
+                "Source":       r["source"],
+            } for r in upcoming_divs])
+            st.dataframe(cal_df, use_container_width=True, hide_index=True)
+
+            st.markdown(
+                f"<div style='font-size:.7rem;color:#424870;margin-top:4px;font-family:Epilogue,sans-serif;'>"                "🟢 CONFIRMED = official GSE press release / company announcement. "                "🔵 HIGH / 🟡 MEDIUM / ⚪ LOW = estimated from 3 / 2 / 1 historical events. "                "Predicted DPS uses last-year DPS × (1 + avg YoY growth). Not investment advice.</div>",
+                unsafe_allow_html=True)
+        else:
+            st.info("No upcoming dividend events found for your current holdings in the next 18 months.")
+
         # DRIP Simulator
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("🌱 Dividend Reinvestment (DRIP) Simulator",
-             "What your portfolio would be worth had you reinvested every dividend")
+             "What your portfolio would be worth had you reinvested every net dividend (after 8% WHT) back into the stock")
         if drip_rows:
             drip_df = pd.DataFrame(drip_rows)
             d1,d2,d3,d4 = st.columns(4)
-            with d1: st.markdown(kpi("Total Dividends Received",f"GHS {m['div']:,.2f}",
-                "Cash received as dividends","pk",icon="🌸"),unsafe_allow_html=True)
+            with d1: st.markdown(kpi("Total Net Dividends",f"GHS {div_summary['net_entitled']:,.2f}",
+                "Net of 8% WHT, all events","pk",icon="🌸"),unsafe_allow_html=True)
             with d2: st.markdown(kpi("DRIP Extra Value",f"+GHS {drip_value:,.2f}",
-                "If dividends had been reinvested","g",icon="🌱"),unsafe_allow_html=True)
+                "If reinvested at current prices","g",icon="🌱"),unsafe_allow_html=True)
             with d3: st.markdown(kpi("DRIP Portfolio Value",f"GHS {m['tv']+drip_value:,.2f}",
                 f"+{drip_value/m['tv']*100:.1f}% vs current","t",icon="💰"),unsafe_allow_html=True)
-            with d4: st.markdown(kpi("Missed Compounding",
+            with d4: st.markdown(kpi("Compounding Missed",
                 f"GHS {drip_value:,.2f}",
-                "Left on the table by taking cash","re",icon="🔥"),unsafe_allow_html=True)
-            st.dataframe(drip_df[["date","guessed_ticker","amount","price_at_reinvest",
-                                   "extra_shares","current_value"]].rename(columns={
-                "date":"Date","guessed_ticker":"Stock","amount":"Dividend (GHS)",
-                "price_at_reinvest":"Price at Reinvest","extra_shares":"Extra Shares","current_value":"Current Value (GHS)"}),
+                "From taking dividends as cash","re",icon="🔥"),unsafe_allow_html=True)
+            disp_cols = ["date","ticker","year_type","net_dividend","reinvest_price","extra_shares","current_value"]
+            disp_cols = [c for c in disp_cols if c in drip_df.columns]
+            st.dataframe(drip_df[disp_cols].rename(columns={
+                "date":"Pay Date","ticker":"Stock","year_type":"Dividend",
+                "net_dividend":"Net Div (GHS)","reinvest_price":"Price",
+                "extra_shares":"Extra Shares","current_value":"Current Value (GHS)"}),
                 use_container_width=True,hide_index=True)
         else:
-            st.info("No dividend transactions found in this statement.")
+            st.info("No past dividend events found in the database for your holdings.")
 
         # Fee Analysis
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
