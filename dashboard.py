@@ -1277,6 +1277,459 @@ def render_sidebar():
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NEW ADVANCED FEATURES
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_correlation_matrix(eq):
+    """
+    Synthetic correlation matrix.
+    Same-sector pairs: base 0.72 ± return-similarity bonus.
+    Cross-sector pairs: base 0.18 ± return-similarity bonus.
+    Diagonal = 1.0.
+    """
+    tickers = [e["ticker"] for e in eq]
+    sectors = [e["sector"] for e in eq]
+    returns = [e["gain_pct"] for e in eq]
+    n = len(eq)
+    corr = np.eye(n)
+    for i in range(n):
+        for j in range(i+1, n):
+            r_sim  = 1.0 - min(1.0, abs(returns[i] - returns[j]) / 100.0)
+            same   = sectors[i] == sectors[j]
+            base   = 0.72 if same else 0.18
+            bonus  = 0.20 * r_sim
+            c      = round(min(0.98, base + bonus), 2)
+            corr[i, j] = corr[j, i] = c
+    return pd.DataFrame(corr, index=tickers, columns=tickers)
+
+
+def chart_correlation_heatmap(eq):
+    p      = th()
+    corr   = build_correlation_matrix(eq)
+    tickers = corr.columns.tolist()
+    z      = corr.values
+    # Custom diverging colorscale centred on 0.4
+    cscale = [
+        [0.0,  p.CARD2],
+        [0.3,  AZURE + "99"],
+        [0.55, VIOLET + "bb"],
+        [0.8,  GOLD   + "cc"],
+        [1.0,  GOLD],
+    ]
+    text   = [[f"{z[i,j]:.2f}" for j in range(len(tickers))] for i in range(len(tickers))]
+    fig    = go.Figure(go.Heatmap(
+        z=z, x=tickers, y=tickers,
+        colorscale=cscale, zmin=0, zmax=1,
+        text=text, texttemplate="%{text}",
+        textfont=dict(size=10, family="DM Mono"),
+        hovertemplate="<b>%{y} × %{x}</b><br>Correlation: %{z:.2f}<extra></extra>",
+        showscale=True,
+        colorbar=dict(
+            tickfont=dict(color=p.TEXT2, size=9, family="DM Mono"),
+            outlinecolor=p.BORDER, outlinewidth=1,
+            title=dict(text="ρ", font=dict(color=p.MUTED, size=11)),
+        ),
+    ))
+    layout = T(title="Estimated Return Correlation Matrix")
+    layout["xaxis"] = dict(tickangle=-35, gridcolor=p.BORDER, side="bottom",
+                           tickfont=dict(color=p.TEXT2, family="Epilogue", size=10))
+    layout["yaxis"] = dict(gridcolor=p.BORDER, autorange="reversed",
+                           tickfont=dict(color=p.TEXT2, family="Epilogue", size=10))
+    layout["height"] = max(360, len(tickers) * 44 + 80)
+    fig.update_layout(**layout)
+    return fig, corr
+
+
+def diversification_score(corr_df):
+    """Lower average off-diagonal correlation = more diversified (0–100 score)."""
+    vals = corr_df.values
+    n    = len(vals)
+    if n <= 1:
+        return 100
+    off  = [vals[i, j] for i in range(n) for j in range(n) if i != j]
+    avg  = np.mean(off)
+    return round((1.0 - avg) * 100)
+
+
+def run_monte_carlo(m, am, years=5, n_sims=1000):
+    """
+    Geometric Brownian Motion portfolio projection.
+    Uses portfolio CAGR and cross-sectional volatility.
+    Returns array shape (n_sims, months+1).
+    """
+    cagr_pct  = m.get("cagr") or max(0.0, m["overall_roi"])
+    mu_annual = cagr_pct / 100.0
+    sigma_ann = max(0.01, am["port_vol"] / 100.0)
+
+    mu_m      = (1 + mu_annual) ** (1/12) - 1
+    sigma_m   = sigma_ann / np.sqrt(12)
+    months    = years * 12
+    V0        = m["total_value"]
+
+    rng       = np.random.default_rng(42)
+    shocks    = rng.normal(mu_m, sigma_m, (n_sims, months))
+    paths     = np.ones((n_sims, months + 1)) * V0
+    for t in range(months):
+        paths[:, t+1] = paths[:, t] * (1 + shocks[:, t])
+    paths = np.maximum(paths, 0)
+    return paths
+
+
+def chart_monte_carlo(m, am, years=5):
+    p      = th()
+    paths  = run_monte_carlo(m, am, years)
+    months = years * 12
+    x      = [i / 12 for i in range(months + 1)]
+
+    pcts   = np.percentile(paths, [5, 15, 25, 50, 75, 85, 95], axis=0)
+    labels = ["5th", "15th", "25th", "50th (median)", "75th", "85th", "95th"]
+
+    fig = go.Figure()
+
+    # Shaded bands
+    band_pairs = [(0, 6, RUBY,    0.07),
+                  (1, 5, AMBER,   0.10),
+                  (2, 4, EMERALD, 0.14)]
+    for lo, hi, clr, opacity in band_pairs:
+        fig.add_trace(go.Scatter(
+            x=x + x[::-1],
+            y=list(pcts[lo]) + list(pcts[hi])[::-1],
+            fill="toself", fillcolor=clr,
+            line=dict(width=0), opacity=opacity,
+            showlegend=False, hoverinfo="skip",
+        ))
+
+    # Percentile lines
+    line_styles = [
+        dict(color=RUBY,    width=1.5, dash="dot"),
+        dict(color=AMBER,   width=1,   dash="dot"),
+        dict(color=AMBER,   width=1,   dash="dash"),
+        dict(color=GOLD,    width=2.5),
+        dict(color=EMERALD, width=1,   dash="dash"),
+        dict(color=EMERALD, width=1,   dash="dot"),
+        dict(color=TEAL,    width=1.5, dash="dot"),
+    ]
+    for i, (lbl, ls) in enumerate(zip(labels, line_styles)):
+        fig.add_trace(go.Scatter(
+            x=x, y=pcts[i], mode="lines", name=lbl,
+            line=ls,
+            hovertemplate=f"<b>{lbl}</b><br>Year %{{x:.1f}}: GHS %{{y:,.0f}}<extra></extra>",
+        ))
+
+    # Current value reference
+    fig.add_hline(y=m["total_value"], line_color=p.MUTED, line_dash="dash", line_width=1,
+                  annotation_text=f" Current GHS {m['total_value']:,.0f}",
+                  annotation_font=dict(color=p.MUTED, size=9, family="DM Mono"))
+
+    # Ruin probability annotation
+    final = paths[:, -1]
+    ruin_pct = np.mean(final < m["total_value"]) * 100
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0.98, y=0.02,
+        text=f"P(below current) = {ruin_pct:.1f}%",
+        showarrow=False, font=dict(size=10, color=RUBY, family="DM Mono"),
+        align="right", bgcolor=p.CARD2, bordercolor=p.BORDER, borderpad=6,
+    )
+
+    layout = T(title=f"Monte Carlo Projection — {years}-Year Portfolio Simulation ({1000} paths)",
+               xt="Years", yt="Portfolio Value (GHS)")
+    layout["height"] = 460
+    fig.update_layout(**layout)
+    return fig, paths
+
+
+def chart_efficient_frontier(eq, equities_val):
+    """
+    Markowitz-style efficient frontier using synthetic covariance
+    (returns = gain_pct, cov built from correlation matrix).
+    Plots frontier + current portfolio + labelled stocks.
+    """
+    p       = th()
+    if len(eq) < 3:
+        return None
+    returns = np.array([e["gain_pct"] for e in eq])
+    corr    = build_correlation_matrix(eq).values
+    # Proxy std: abs(return) * 0.4 + 5, floored at 3
+    stds    = np.maximum(3.0, np.abs(returns) * 0.4 + 5)
+    cov     = np.outer(stds, stds) * corr
+    n       = len(eq)
+
+    # Simulate random portfolios
+    rng     = np.random.default_rng(7)
+    N_SIM   = 2500
+    sim_ret, sim_vol, sim_w = [], [], []
+    for _ in range(N_SIM):
+        w = rng.dirichlet(np.ones(n))
+        r = float(w @ returns)
+        v = float(np.sqrt(w @ cov @ w))
+        sim_ret.append(r)
+        sim_vol.append(v)
+        sim_w.append(w)
+
+    # Current portfolio point
+    w_curr  = np.array([e["market_value"] / equities_val for e in eq]) if equities_val else np.ones(n)/n
+    r_curr  = float(w_curr @ returns)
+    v_curr  = float(np.sqrt(w_curr @ cov @ w_curr))
+
+    # Equal-weight point
+    w_eq    = np.ones(n) / n
+    r_eq    = float(w_eq @ returns)
+    v_eq    = float(np.sqrt(w_eq @ cov @ w_eq))
+
+    # Min-variance frontier
+    sim_arr  = np.array(list(zip(sim_vol, sim_ret)))
+    rf       = 18.0
+    sharpes  = [(r - rf) / v if v > 0 else -99 for r, v in zip(sim_ret, sim_vol)]
+    best_idx = int(np.argmax(sharpes))
+
+    fig = go.Figure()
+
+    # Scatter of random portfolios coloured by Sharpe
+    fig.add_trace(go.Scatter(
+        x=sim_vol, y=sim_ret, mode="markers",
+        marker=dict(
+            size=4, opacity=0.4,
+            color=sharpes,
+            colorscale=[[0, RUBY], [0.5, AMBER], [1, EMERALD]],
+            showscale=True,
+            colorbar=dict(title=dict(text="Sharpe", font=dict(color=p.MUTED, size=9)),
+                          tickfont=dict(color=p.TEXT2, size=8, family="DM Mono"),
+                          outlinecolor=p.BORDER, outlinewidth=1,
+                          len=0.6),
+        ),
+        hovertemplate="Vol: %{x:.1f}%<br>Return: %{y:.1f}%<extra>Random Portfolio</extra>",
+        name="Simulated portfolios",
+    ))
+
+    # Max-Sharpe portfolio
+    fig.add_trace(go.Scatter(
+        x=[sim_vol[best_idx]], y=[sim_ret[best_idx]],
+        mode="markers+text", name="Max Sharpe",
+        marker=dict(size=16, color=GOLD, symbol="star",
+                    line=dict(color=p.BG, width=2)),
+        text=["Max Sharpe"], textposition="top center",
+        textfont=dict(color=GOLD, size=10, family="Epilogue"),
+        hovertemplate=f"Max Sharpe<br>Vol: {sim_vol[best_idx]:.1f}%<br>Return: {sim_ret[best_idx]:.1f}%<extra></extra>",
+    ))
+
+    # Current portfolio
+    fig.add_trace(go.Scatter(
+        x=[v_curr], y=[r_curr],
+        mode="markers+text", name="Your Portfolio",
+        marker=dict(size=18, color=VIOLET, symbol="diamond",
+                    line=dict(color=p.BG, width=2)),
+        text=["You"], textposition="top center",
+        textfont=dict(color=VIOLET, size=11, family="Epilogue"),
+        hovertemplate=f"Your Portfolio<br>Vol: {v_curr:.1f}%<br>Return: {r_curr:.1f}%<extra></extra>",
+    ))
+
+    # Equal-weight
+    fig.add_trace(go.Scatter(
+        x=[v_eq], y=[r_eq],
+        mode="markers+text", name="Equal Weight",
+        marker=dict(size=14, color=AZURE, symbol="circle",
+                    line=dict(color=p.BG, width=2)),
+        text=["Equal Wt"], textposition="bottom right",
+        textfont=dict(color=AZURE, size=9, family="Epilogue"),
+        hovertemplate=f"Equal Weight<br>Vol: {v_eq:.1f}%<br>Return: {r_eq:.1f}%<extra></extra>",
+    ))
+
+    # Individual stocks
+    for e, s in zip(eq, stds):
+        fig.add_trace(go.Scatter(
+            x=[s], y=[e["gain_pct"]],
+            mode="markers+text", showlegend=False,
+            marker=dict(size=8, color=SECTOR_COLORS.get(e["sector"], SLATE),
+                        opacity=0.7, line=dict(color=p.BG, width=1)),
+            text=[e["ticker"]], textposition="middle right",
+            textfont=dict(size=8, color=p.TEXT2, family="Epilogue"),
+            hovertemplate=f"<b>{e['ticker']}</b><br>Est. Vol: {s:.1f}%<br>Return: {e['gain_pct']:+.1f}%<extra></extra>",
+        ))
+
+    layout = T(title="Portfolio Efficient Frontier — 2 500 random weight simulations",
+               xt="Estimated Volatility (%)", yt="Return (%)")
+    layout["height"] = 500
+    fig.update_layout(**layout)
+    return fig, sim_vol[best_idx], sim_ret[best_idx], sim_w[best_idx]
+
+
+def chart_real_vs_nominal(eq, inflation_pct):
+    """Bar chart comparing nominal return vs real (inflation-adjusted) return per stock."""
+    p       = th()
+    df      = pd.DataFrame(eq).copy()
+    infl    = inflation_pct / 100.0
+    df["real_return"] = ((1 + df["gain_pct"]/100) / (1 + infl) - 1) * 100
+    df = df.sort_values("gain_pct")
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Nominal Return", x=df["ticker"], y=df["gain_pct"],
+        marker_color=AZURE, opacity=0.8,
+        text=[f"{v:+.1f}%" for v in df["gain_pct"]], textposition="outside",
+        textfont=dict(size=9, family="DM Mono"),
+    ))
+    fig.add_trace(go.Bar(
+        name=f"Real Return (adj. {inflation_pct:.0f}% CPI)", x=df["ticker"], y=df["real_return"],
+        marker_color=[EMERALD if v >= 0 else RUBY for v in df["real_return"]], opacity=0.85,
+        text=[f"{v:+.1f}%" for v in df["real_return"]], textposition="outside",
+        textfont=dict(size=9, family="DM Mono"),
+    ))
+    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
+    fig.add_hline(y=inflation_pct, line_color=AMBER, line_dash="dot", line_width=1.5,
+                  annotation_text=f" Inflation hurdle ({inflation_pct:.0f}%)",
+                  annotation_font=dict(color=AMBER, size=9, family="DM Mono"))
+    layout = T(title=f"Nominal vs Real Returns (Ghana CPI: {inflation_pct:.1f}%)", yt="Return (%)")
+    layout["barmode"]= "group"
+    layout["height"] = 380
+    fig.update_layout(**layout)
+    return fig
+
+
+def compute_tax_estimates(eq, txs):
+    """
+    Ghana tax estimates:
+    - Capital Gains Tax: 15% on net realised gains (Sell transactions at profit)
+    - Dividend Withholding Tax: 8% on gross dividends (often already withheld)
+    - Stamp Duty: 0.5% on share purchases
+    """
+    results = []
+
+    # Stamp duty from Buy transactions
+    buy_total = sum(t["debit"] for t in txs if t["type"] == "Buy")
+    stamp_duty = buy_total * 0.005
+
+    # Dividend WHT
+    div_gross  = sum(t["credit"] for t in txs if t["type"] == "Dividend")
+    div_wht    = div_gross * 0.08
+
+    # CGT on sell proceeds vs cost basis
+    sell_total = sum(t["credit"] for t in txs if t["type"] == "Sell")
+    buy_est    = sum(t["debit"]  for t in txs if t["type"] == "Buy")
+    realised_gain = max(0, sell_total - buy_est * (sell_total / buy_est if buy_est else 0))
+    cgt = realised_gain * 0.15
+
+    # Unrealised CGT liability (if all positions were sold today)
+    unrealised_gain = sum(e["gain_loss"] for e in eq if e["gain_loss"] > 0)
+    cgt_unrealised  = unrealised_gain * 0.15
+
+    rows = [
+        ("Stamp Duty on Purchases",  "0.5% of buy value",     buy_total,        stamp_duty,       "Paid on execution"),
+        ("Dividend Withholding Tax", "8% of gross dividends", div_gross,         div_wht,          "Usually withheld at source"),
+        ("Capital Gains Tax (Est.)", "15% on realised gains", realised_gain,     cgt,              "Payable on disposal"),
+        ("CGT Liability (Unrealised)","15% if sold today",    unrealised_gain,   cgt_unrealised,   "Contingent / not yet due"),
+    ]
+    df = pd.DataFrame(rows, columns=["Tax Type","Rate","Taxable Base (GHS)","Estimated Tax (GHS)","Notes"])
+    df["Taxable Base (GHS)"] = df["Taxable Base (GHS)"].apply(lambda v: f"GHS {v:,.2f}")
+    df["Estimated Tax (GHS)"]= df["Estimated Tax (GHS)"].apply(lambda v: f"GHS {v:,.2f}")
+    total_known = stamp_duty + div_wht + cgt
+    return df, stamp_duty, div_wht, cgt, cgt_unrealised, total_known
+
+
+def goal_planner_data(current_value, monthly_contrib, annual_return_pct, years):
+    """
+    Project future portfolio value given monthly contributions and return.
+    Returns arrays of month index and portfolio value.
+    """
+    r = (1 + annual_return_pct/100) ** (1/12) - 1
+    months = years * 12
+    vals   = [current_value]
+    for _ in range(months):
+        vals.append(vals[-1] * (1 + r) + monthly_contrib)
+    return vals
+
+
+def chart_goal_projection(current_value, monthly_contrib, annual_return_pct, years,
+                          target_value=None, inflation_pct=0):
+    p   = th()
+    nominal = goal_planner_data(current_value, monthly_contrib, annual_return_pct, years)
+    real_r  = ((1 + annual_return_pct/100) / (1 + inflation_pct/100) - 1) * 100
+    real    = goal_planner_data(current_value, monthly_contrib, real_r, years)
+    x       = [i/12 for i in range(len(nominal))]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x, y=nominal, mode="lines", name="Nominal Value",
+        line=dict(color=GOLD, width=2.5),
+        fill="tozeroy", fillcolor=f"rgba(232,180,56,0.07)",
+        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>Nominal</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=real, mode="lines", name=f"Real Value ({inflation_pct:.0f}% CPI adj.)",
+        line=dict(color=TEAL, width=1.8, dash="dash"),
+        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>Real</extra>",
+    ))
+    if target_value:
+        fig.add_hline(y=target_value, line_color=EMERALD, line_dash="dot", line_width=2,
+                      annotation_text=f" Target GHS {target_value:,.0f}",
+                      annotation_font=dict(color=EMERALD, size=10, family="DM Mono"))
+        # Find when we hit target
+        for i, v in enumerate(nominal):
+            if v >= target_value:
+                yr = i / 12
+                fig.add_vline(x=yr, line_color=EMERALD, line_dash="dash", line_width=1,
+                              annotation_text=f" {yr:.1f}y",
+                              annotation_font=dict(color=EMERALD, size=9, family="DM Mono"))
+                break
+    fig.add_hline(y=current_value, line_color=p.MUTED, line_dash="dash", line_width=1,
+                  annotation_text=f" Current GHS {current_value:,.0f}",
+                  annotation_font=dict(color=p.MUTED, size=9, family="DM Mono"))
+    layout = T(title="Portfolio Projection", xt="Years", yt="Value (GHS)")
+    layout["height"] = 380
+    fig.update_layout(**layout)
+    return fig
+
+
+def chart_drip(eq, m, years=10, div_growth_pct=5.0):
+    """DRIP: compare portfolio growth with vs without dividend reinvestment."""
+    p           = th()
+    div_income  = m["dividend_income"]
+    port_val    = m["equities_val"] if m["equities_val"] else m["total_value"]
+    div_yield   = div_income / port_val if port_val else 0
+    cagr        = (m.get("cagr") or m["overall_roi"]) / 100
+    months      = years * 12
+    r_m         = (1 + cagr) ** (1/12) - 1
+    dg_m        = (1 + div_growth_pct/100) ** (1/12) - 1
+
+    no_drip, drip = [port_val], [port_val]
+    monthly_div = div_income / 12
+
+    for t in range(months):
+        # No DRIP: dividends paid out, not reinvested
+        no_drip.append(no_drip[-1] * (1 + r_m))
+        # DRIP: dividends reinvested each month
+        current_monthly_div = monthly_div * ((1 + dg_m) ** t)
+        drip.append(drip[-1] * (1 + r_m) + current_monthly_div)
+
+    x = [i/12 for i in range(months + 1)]
+    drip_bonus = drip[-1] - no_drip[-1]
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=x, y=no_drip, mode="lines", name="Without DRIP",
+        line=dict(color=VIOLET, width=2),
+        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>No DRIP</extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=drip, mode="lines", name="With DRIP",
+        line=dict(color=EMERALD, width=2.5),
+        fill="tonexty", fillcolor="rgba(0,212,133,0.08)",
+        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>DRIP</extra>",
+    ))
+    fig.add_annotation(
+        xref="paper", yref="paper", x=0.98, y=0.92,
+        text=f"DRIP bonus after {years}y<br><b style='font-size:14px'>GHS {drip_bonus:,.0f}</b>",
+        showarrow=False, font=dict(size=10, color=EMERALD, family="DM Mono"),
+        align="right", bgcolor=p.CARD2, bordercolor=EMERALD+"55", borderpad=8,
+    )
+    layout = T(title=f"Dividend Reinvestment (DRIP) vs No Reinvestment — {years}-year projection",
+               xt="Years", yt="Portfolio Value (GHS)")
+    layout["height"] = 340
+    fig.update_layout(**layout)
+    return fig, drip_bonus
+
+
 def main():
     apply_theme()
     render_sidebar()
@@ -1400,8 +1853,9 @@ def main():
     <div class='cbar-val'><span class='pill {pp_cls}'>{pp_txt}</span></div></div>
 </div>""", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
         "📊 Overview", "📈 Performance", "🔬 Analytics",
+        "🎲 Projections", "🧮 Deep Analysis",
         "⚖️ Risk & Scenarios", "💸 Cash Flow", "📋 Holdings",
     ])
 
@@ -1629,10 +2083,287 @@ def main():
             })
         st.dataframe(pd.DataFrame(ana_rows), use_container_width=True, hide_index=True)
 
+
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 4 — RISK & SCENARIOS
+    # TAB 4 — PROJECTIONS
     # ═══════════════════════════════════════════════════════════════════════════
     with tab4:
+        shdr("🎲 Monte Carlo Portfolio Simulation",
+             "Based on portfolio CAGR and return dispersion across holdings")
+
+        mc_col1, mc_col2, mc_col3 = st.columns(3)
+        with mc_col1:
+            mc_years = st.slider("Projection horizon (years)", 1, 15, 5, key="mc_years")
+        with mc_col2:
+            mc_cagr_override = st.number_input(
+                "Annual return assumption (%)",
+                value=float(round(m.get("cagr") or max(0.0, m["overall_roi"]), 1)),
+                min_value=-30.0, max_value=80.0, step=0.5, format="%.1f",
+                key="mc_cagr")
+        with mc_col3:
+            mc_vol_override = st.number_input(
+                "Annual volatility (%)",
+                value=float(round(am["port_vol"], 1)),
+                min_value=1.0, max_value=100.0, step=0.5, format="%.1f",
+                key="mc_vol")
+
+        # Build a temporary override metrics object
+        _m_mc = {**m, "cagr": mc_cagr_override}
+        _am_mc = {**am, "port_vol": mc_vol_override}
+        mc_fig, mc_paths = chart_monte_carlo(_m_mc, _am_mc, mc_years)
+        st.plotly_chart(mc_fig, use_container_width=True)
+
+        # Summary statistics
+        final = mc_paths[:, -1]
+        p10, p50, p90 = np.percentile(final, [10, 50, 90])
+        prob_above = np.mean(final > m["total_value"]) * 100
+        prob_2x    = np.mean(final > m["total_value"] * 2) * 100
+
+        mc1, mc2, mc3, mc4, mc5 = st.columns(5)
+        with mc1:
+            st.markdown(kpi("Median Outcome",
+                f"GHS {p50:,.0f}",
+                f"50th percentile at year {mc_years}", "g"), unsafe_allow_html=True)
+        with mc2:
+            st.markdown(kpi("Bear Case (10th %ile)",
+                f"GHS {p10:,.0f}",
+                "10% of paths end below this", "r"), unsafe_allow_html=True)
+        with mc3:
+            st.markdown(kpi("Bull Case (90th %ile)",
+                f"GHS {p90:,.0f}",
+                "10% of paths end above this", "t"), unsafe_allow_html=True)
+        with mc4:
+            c = EMERALD if prob_above >= 60 else AMBER if prob_above >= 40 else RUBY
+            st.markdown(kpi("P(Beat Current)",
+                f"<span style='color:{c}'>{prob_above:.1f}%</span>",
+                "Probability portfolio grows", "b"), unsafe_allow_html=True)
+        with mc5:
+            c2 = EMERALD if prob_2x >= 30 else AMBER
+            st.markdown(kpi("P(Double)",
+                f"<span style='color:{c2}'>{prob_2x:.1f}%</span>",
+                "Probability of 2× current value", "vi"), unsafe_allow_html=True)
+
+        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        shdr("🎯 Goal Planner",
+             "How much do you need to invest monthly to reach your target?")
+
+        g1, g2, g3, g4 = st.columns(4)
+        with g1:
+            goal_target = st.number_input("Target Portfolio Value (GHS)",
+                value=float(round(m["total_value"] * 2, -3)),
+                min_value=0.0, step=10000.0, format="%.0f", key="goal_target")
+        with g2:
+            goal_years = st.slider("Time horizon (years)", 1, 30, 10, key="goal_years")
+        with g3:
+            goal_return = st.number_input("Expected annual return (%)",
+                value=float(round(mc_cagr_override, 1)),
+                min_value=0.1, max_value=80.0, step=0.5, format="%.1f", key="goal_ret")
+        with g4:
+            goal_inflation = st.number_input("Ghana CPI / Inflation (%)",
+                value=23.0, min_value=0.0, max_value=80.0, step=0.5, format="%.1f",
+                key="goal_infl")
+
+        # Compute required monthly contribution
+        r_m     = (1 + goal_return/100) ** (1/12) - 1
+        n_m     = goal_years * 12
+        fv_curr = m["total_value"] * (1 + r_m) ** n_m   # current value compounded
+        shortfall = goal_target - fv_curr
+        if shortfall <= 0:
+            req_monthly = 0.0
+            msg = "🎉 Your current portfolio will reach that target with no additional contributions!"
+        elif r_m > 0:
+            req_monthly = shortfall * r_m / ((1 + r_m)**n_m - 1)
+            msg = ""
+        else:
+            req_monthly = shortfall / n_m
+            msg = ""
+
+        gp1, gp2, gp3, gp4 = st.columns(4)
+        with gp1:
+            st.markdown(kpi("Required Monthly Contribution",
+                f"GHS {req_monthly:,.2f}",
+                f"to reach GHS {goal_target:,.0f} in {goal_years}y", "y", icon="💳"),
+                unsafe_allow_html=True)
+        with gp2:
+            total_contrib = req_monthly * n_m
+            st.markdown(kpi("Total You'll Contribute",
+                f"GHS {total_contrib:,.0f}",
+                "cumulative over the period", "b"), unsafe_allow_html=True)
+        with gp3:
+            growth = goal_target - m["total_value"] - total_contrib
+            st.markdown(kpi("Investment Growth Component",
+                f"GHS {max(0, growth):,.0f}",
+                "returns on top of contributions", "g"), unsafe_allow_html=True)
+        with gp4:
+            real_target = goal_target / (1 + goal_inflation/100)**goal_years
+            st.markdown(kpi("Target in Today's GHS",
+                f"GHS {real_target:,.0f}",
+                f"inflation-adjusted ({goal_inflation:.0f}% CPI)", "t"), unsafe_allow_html=True)
+
+        if msg:
+            st.success(msg)
+
+        goal_fig = chart_goal_projection(
+            m["total_value"], req_monthly, goal_return, goal_years,
+            target_value=goal_target, inflation_pct=goal_inflation)
+        st.plotly_chart(goal_fig, use_container_width=True)
+
+        # DRIP section
+        if m["dividend_income"] > 0:
+            st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+            shdr("🌱 Dividend Reinvestment (DRIP) Simulator")
+            drip_c1, drip_c2 = st.columns(2)
+            with drip_c1:
+                drip_years = st.slider("DRIP horizon (years)", 1, 20, 10, key="drip_years")
+            with drip_c2:
+                drip_growth = st.slider("Dividend growth rate (% p.a.)", 0, 20, 5, key="drip_growth")
+            drip_fig, drip_bonus = chart_drip(eq, m, drip_years, drip_growth)
+            st.plotly_chart(drip_fig, use_container_width=True)
+            st.markdown(
+                alert_box("DRIP Advantage",
+                    f"Reinvesting dividends adds an estimated <b>GHS {drip_bonus:,.2f}</b> "
+                    f"to your portfolio over {drip_years} years at {drip_growth}% dividend growth rate. "
+                    f"That's pure compounding with no extra capital deployed.",
+                    "ok"), unsafe_allow_html=True)
+        else:
+            st.info("No dividend income detected in this statement — DRIP simulator will appear once dividends are recorded.")
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 5 — DEEP ANALYSIS
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab5:
+        # ── Efficient Frontier ────────────────────────────────────────────────
+        shdr("📐 Efficient Frontier",
+             "Where does your current allocation sit vs the optimal risk/return frontier?")
+        if len(eq) >= 3:
+            ef_result = chart_efficient_frontier(eq, m["equities_val"])
+            if ef_result:
+                ef_fig, ef_vol, ef_ret, ef_w = ef_result
+                st.plotly_chart(ef_fig, use_container_width=True)
+
+                # Show optimal weights
+                ef_rows = []
+                for e, w in zip(eq, ef_w):
+                    curr_w = e["market_value"] / m["equities_val"] * 100 if m["equities_val"] else 0
+                    diff   = w*100 - curr_w
+                    ef_rows.append({
+                        "Ticker":           e["ticker"],
+                        "Sector":           e["sector"],
+                        "Current Weight %": f"{curr_w:.1f}%",
+                        "Max-Sharpe Weight %": f"{w*100:.1f}%",
+                        "Δ Weight":         f"{'+'if diff>=0 else ''}{diff:.1f}%",
+                        "Action":           ("🟢 Add" if diff > 3 else "🔴 Trim" if diff < -3 else "✅ Hold"),
+                    })
+                st.caption(f"Max-Sharpe portfolio: Est. Vol {ef_vol:.1f}% · Return {ef_ret:.1f}%")
+                st.dataframe(pd.DataFrame(ef_rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("Need at least 3 holdings to compute an efficient frontier.")
+
+        # ── Correlation Matrix ────────────────────────────────────────────────
+        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        shdr("🔗 Return Correlation Matrix",
+             "High correlation = positions are NOT diversifying you")
+        corr_fig, corr_df = chart_correlation_heatmap(eq)
+        div_score = diversification_score(corr_df)
+        div_c     = EMERALD if div_score >= 65 else AMBER if div_score >= 45 else RUBY
+        div_label = "Well Diversified" if div_score >= 65 else "Moderately Diversified" if div_score >= 45 else "Concentrated"
+
+        dc1, dc2, dc3 = st.columns(3)
+        with dc1:
+            st.markdown(kpi("Diversification Score",
+                f"<span style='color:{div_c}'>{div_score}</span>/100",
+                f"{div_label} · lower avg correlation = higher score",
+                "t" if div_score >= 65 else "y"), unsafe_allow_html=True)
+        with dc2:
+            n_high = int(sum(1 for i in range(len(eq)) for j in range(i+1,len(eq))
+                             if corr_df.values[i,j] >= 0.70))
+            st.markdown(kpi("Highly Correlated Pairs",
+                f"{n_high}",
+                "pairs with ρ ≥ 0.70 (limited diversification value)",
+                "r" if n_high > 3 else "y" if n_high > 1 else "g"), unsafe_allow_html=True)
+        with dc3:
+            n_sectors = m["sectors_used"]
+            st.markdown(kpi("Sectors in Portfolio",
+                f"{n_sectors}",
+                "more sectors = lower average correlation",
+                "g" if n_sectors >= 5 else "y" if n_sectors >= 3 else "r"), unsafe_allow_html=True)
+
+        st.plotly_chart(corr_fig, use_container_width=True)
+
+        # ── Inflation-Adjusted Returns ────────────────────────────────────────
+        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        shdr("📉 Real (Inflation-Adjusted) Returns",
+             "In Ghana's high-inflation environment, nominal gains can mask real losses")
+
+        infl_rate = st.slider(
+            "Ghana CPI / Inflation Rate (%)",
+            min_value=5.0, max_value=60.0, value=23.0, step=0.5,
+            format="%.1f%%", key="infl_slider")
+
+        real_fig = chart_real_vs_nominal(eq, infl_rate)
+        st.plotly_chart(real_fig, use_container_width=True)
+
+        # Portfolio-level real return summary
+        nom_port = m["gain_pct"]
+        real_port = ((1 + nom_port/100) / (1 + infl_rate/100) - 1) * 100
+        beaten_inflation = sum(1 for e in eq
+                               if ((1 + e["gain_pct"]/100) / (1 + infl_rate/100) - 1) * 100 > 0)
+        rp1, rp2, rp3 = st.columns(3)
+        with rp1:
+            rpc = EMERALD if real_port >= 0 else RUBY
+            st.markdown(kpi("Portfolio Real Return",
+                f"<span style='color:{rpc}'>{real_port:+.2f}%</span>",
+                f"Nominal {nom_port:+.2f}% − {infl_rate:.0f}% CPI",
+                "g" if real_port >= 0 else "r"), unsafe_allow_html=True)
+        with rp2:
+            st.markdown(kpi("Stocks Beating Inflation",
+                f"{beaten_inflation} / {len(eq)}",
+                f"Positive real return at {infl_rate:.0f}% CPI",
+                "g" if beaten_inflation >= len(eq)//2 else "r"), unsafe_allow_html=True)
+        with rp3:
+            real_val = m["total_value"] / (1 + infl_rate/100)
+            st.markdown(kpi("Portfolio in Today's GHS",
+                f"GHS {real_val:,.2f}",
+                "Purchasing power equivalent",
+                "t"), unsafe_allow_html=True)
+
+        # ── Ghana Tax Estimator ───────────────────────────────────────────────
+        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        shdr("🧾 Ghana Tax Estimator",
+             "Capital Gains Tax (15%) · Dividend WHT (8%) · Stamp Duty (0.5%)")
+
+        tax_df, stamp, div_wht, cgt, cgt_unreal, total_known = compute_tax_estimates(eq, txs)
+        st.dataframe(tax_df, use_container_width=True, hide_index=True)
+
+        t1, t2, t3, t4 = st.columns(4)
+        with t1:
+            st.markdown(kpi("Stamp Duty Paid",
+                f"GHS {stamp:,.2f}", "0.5% on share purchases", "b", icon="🏛️"),
+                unsafe_allow_html=True)
+        with t2:
+            st.markdown(kpi("Dividend WHT (Est.)",
+                f"GHS {div_wht:,.2f}", "8% — typically withheld at source", "pk", icon="🌸"),
+                unsafe_allow_html=True)
+        with t3:
+            st.markdown(kpi("Realised CGT (Est.)",
+                f"GHS {cgt:,.2f}", "15% on net realised gains from Sells", "y", icon="📋"),
+                unsafe_allow_html=True)
+        with t4:
+            st.markdown(kpi("Unrealised CGT Liability",
+                f"GHS {cgt_unreal:,.2f}",
+                "If all profitable positions sold today", "r", icon="⚠️"),
+                unsafe_allow_html=True)
+        st.markdown(
+            alert_box("Tax Disclaimer",
+                "These are <b>estimates only</b> based on publicly available Ghana Revenue Authority rates. "
+                "Actual tax liability depends on your full tax position, holding period, and applicable exemptions. "
+                "Consult a qualified Ghana tax professional for advice.",
+                "info"), unsafe_allow_html=True)
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TAB 6 — RISK & SCENARIOS
+    # ═══════════════════════════════════════════════════════════════════════════
+    with tab6:
         be = chart_breakeven(eq)
         if be:
             shdr("🎯 Break-even Analysis")
@@ -1737,9 +2468,9 @@ def main():
         st.plotly_chart(fig_sim, use_container_width=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 5 — CASH FLOW
+    # TAB 7 — CASH FLOW
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab5:
+    with tab7:
         shdr("Cash Flow & History")
         cf = chart_cashflow(txs)
         if cf:
@@ -1798,9 +2529,9 @@ def main():
                 f"Buy vol GHS {buy_vol:,.0f}", "vi", icon="🧭"), unsafe_allow_html=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 6 — HOLDINGS
+    # TAB 8 — HOLDINGS
     # ═══════════════════════════════════════════════════════════════════════════
-    with tab6:
+    with tab8:
         shdr("Equity Positions")
 
         fc1, fc2, fc3 = st.columns([2, 2, 2])
