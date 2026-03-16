@@ -64,10 +64,11 @@ def th():
     return _DARK
 
 
-def T(xt=None, yt=None):
-    """Base Plotly layout dict. Use xt/yt args for axis titles — never pass
-    xaxis_title= or yaxis_title= alongside **T() as Plotly's magic-underscore
-    expansion would produce a duplicate-key TypeError."""
+def T(title=None, xt=None, yt=None):
+    """Base Plotly layout dict.
+    Pass chart titles here via T(title=...) NOT via fig.update_layout(title=..., **T()).
+    Pass axis titles via T(xt=..., yt=...) NOT via xaxis_title= or yaxis_title=.
+    Both patterns trigger Plotly magic-underscore duplicate-key TypeErrors."""
     p  = th()
     tf = dict(color=p.MUTED, size=11, family="'DM Mono','Courier New',monospace")
     xax = dict(gridcolor=p.BORDER, zerolinecolor=p.BORDER2,
@@ -78,6 +79,9 @@ def T(xt=None, yt=None):
         xax["title"] = dict(text=xt, font=tf)
     if yt:
         yax["title"] = dict(text=yt, font=tf)
+    td = dict(font=dict(color=p.TEXT, family="'Epilogue',sans-serif", size=14), x=0.01)
+    if title:
+        td["text"] = title
     return dict(
         paper_bgcolor = p.BG,
         plot_bgcolor  = p.CARD,
@@ -89,7 +93,7 @@ def T(xt=None, yt=None):
                              font=dict(color=p.TEXT2, family="Epilogue,sans-serif")),
         hoverlabel    = dict(bgcolor=p.CARD2, bordercolor=p.BORDER2,
                              font=dict(color=p.TEXT, family="'DM Mono',monospace")),
-        title         = dict(font=dict(color=p.TEXT, family="'Epilogue',sans-serif", size=14), x=0.01),
+        title         = td,
     )
 
 
@@ -679,7 +683,7 @@ def chart_gain_loss(eq):
         hovertemplate="<b>%{y}</b><br>Return: %{x:.2f}%<extra></extra>",
     ))
     fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(title="Return per Stock (%)", **T(xt="Return (%)"), height=380)
+    fig.update_layout(**T(title="Return per Stock (%)", xt="Return (%)"), height=380)
     return fig
 
 
@@ -772,8 +776,7 @@ def chart_portfolio_efficiency(eq):
         hovertemplate="<b>%{y}</b><br>Efficiency: %{x:+.1f}%<br>P&L: GHS %{customdata:,.2f}<extra></extra>",
     ))
     fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(title="Portfolio Efficiency — Gain / GHS Invested (%)",
-                      **T(xt="ROI (%)"), height=360)
+    fig.update_layout(**T(title="Portfolio Efficiency — Gain / GHS Invested (%)", xt="ROI (%)"), height=360)
     return fig
 
 
@@ -838,7 +841,7 @@ def chart_pl_waterfall(eq):
         hovertemplate="<b>%{x}</b><br>P&L: GHS %{y:,.2f}<extra></extra>",
     ))
     fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(title="P&L Contribution per Stock (GHS)", **T(yt="GHS"), height=340)
+    fig.update_layout(**T(title="P&L Contribution per Stock (GHS)", yt="GHS"), height=340)
     return fig
 
 
@@ -858,8 +861,7 @@ def chart_market_vs_cost(eq):
                            y=max(row["total_cost"], row["market_value"]),
                            text=f"{gl:+.1f}%", showarrow=False, yshift=12,
                            font=dict(color=EMERALD if gl >= 0 else RUBY, size=9, family="DM Mono"))
-    fig.update_layout(title="Market Value vs Cost Basis", **T(yt="GHS"),
-                      barmode="group", height=380)
+    fig.update_layout(**T(title="Market Value vs Cost Basis", yt="GHS"), barmode="group", height=380)
     return fig
 
 
@@ -879,8 +881,7 @@ def chart_allocation_treemap(ps):
         textfont=dict(size=12, family="Epilogue"),
         hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f}<br>%{percentRoot:.1%}<extra></extra>",
     ))
-    fig.update_layout(title="Asset Class Allocation", height=300,
-                      **{**T(), "margin":dict(l=8,r=8,t=48,b=8)})
+    fig.update_layout(**{**T(title="Asset Class Allocation"), "margin":dict(l=8,r=8,t=48,b=8)}, height=300)
     return fig
 
 
@@ -906,8 +907,7 @@ def chart_drawdown(txs, total_value):
         hovertemplate="%{x|%b %d %Y}<br>Drawdown: %{y:.2f}%<extra></extra>",
     ))
     fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(title="Portfolio Drawdown (%) from Peak",
-                      **T(xt="Date", yt="Drawdown (%)"), height=300)
+    fig.update_layout(**T(title="Portfolio Drawdown (%) from Peak", xt="Date", yt="Drawdown (%)"), height=300)
     return fig
 
 
@@ -1120,7 +1120,7 @@ def chart_dividend_timeline(txs):
         textfont=dict(color=p.TEXT2, size=9, family="DM Mono"),
         hovertemplate="%{x}<br>Dividends: GHS %{y:,.2f}<extra></extra>",
     ))
-    fig.update_layout(title="Dividend Income by Month", **T(yt="GHS"), height=280)
+    fig.update_layout(**T(title="Dividend Income by Month", yt="GHS"), height=280)
     return fig
 
 
@@ -1145,8 +1145,7 @@ def chart_rolling_return(txs, total_value):
         line=dict(color=GOLD, width=1.5, dash="dot"), name="Net Invested",
         hovertemplate="%{x|%b %d, %Y}<br>Invested: GHS %{y:,.2f}<extra></extra>",
     ))
-    fig.update_layout(title="Estimated Portfolio Value Over Time",
-                      **T(xt="Date", yt="GHS"), height=320)
+    fig.update_layout(**T(title="Estimated Portfolio Value Over Time", xt="Date", yt="GHS"), height=320)
     return fig
 
 
@@ -1167,8 +1166,7 @@ def chart_price_comparison(eq):
         fig.add_annotation(x=row["ticker"], y=max(row["statement_price"], row["live_price"]),
                            text=f"{row['pct_diff']:+.1f}%", showarrow=False, yshift=12,
                            font=dict(color=c, size=9, family="DM Mono"))
-    fig.update_layout(title="Statement vs Live Price", **T(yt="GHS per Share"),
-                      barmode="group", height=320)
+    fig.update_layout(**T(title="Statement vs Live Price", yt="GHS per Share"), barmode="group", height=320)
     return fig
 
 
@@ -1187,8 +1185,7 @@ def chart_stock_weight(eq):
         customdata=df["market_value"],
         hovertemplate="<b>%{y}</b><br>Weight: %{x:.2f}%<br>GHS %{customdata:,.2f}<extra></extra>",
     ))
-    fig.update_layout(title="Portfolio Weight by Stock", **T(xt="Weight (%)"),
-                      height=340, showlegend=False)
+    fig.update_layout(**T(title="Portfolio Weight by Stock", xt="Weight (%)"), height=340, showlegend=False)
     return fig
 
 
@@ -1741,8 +1738,7 @@ def main():
                                      color=[EMERALD if s > c else RUBY
                                             for s, c in zip(sim_df["simulated"], sim_df["current"])],
                                      opacity=0.9)))
-        fig_sim.update_layout(title="Current vs Simulated Market Value",
-                              **T(yt="GHS"), barmode="group", height=320)
+        fig_sim.update_layout(**T(title="Current vs Simulated Market Value", yt="GHS"), barmode="group", height=320)
         st.plotly_chart(fig_sim, use_container_width=True)
 
     # ═══════════════════════════════════════════════════════════════════════════
@@ -1781,8 +1777,7 @@ def main():
                 textfont=dict(size=10, family="DM Mono"),
                 hovertemplate="%{x}: GHS %{y:,.2f}<extra></extra>",
             ))
-            fig_tt.update_layout(title="Volume by Transaction Type",
-                                 **T(yt="GHS"), height=280)
+            fig_tt.update_layout(**T(title="Volume by Transaction Type", yt="GHS"), height=280)
             st.plotly_chart(fig_tt, use_container_width=True)
 
         if not tx_df2.empty:
