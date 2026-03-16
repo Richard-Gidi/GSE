@@ -1649,12 +1649,12 @@ def main():
     with tab2:
         shdr("Performance Analysis")
         cl,cr = st.columns([3,2])
-        with cl: st.plotly_chart(chart_gain_loss(eq),use_container_width=True)
-        with cr: st.plotly_chart(chart_sector_donut(eq),use_container_width=True)
-        st.plotly_chart(chart_performance_attribution(eq,m["ev"]),use_container_width=True)
-        st.plotly_chart(chart_sector_performance(eq),use_container_width=True)
+        with cl: st.plotly_chart(chart_gain_loss(eq), key="pc_1",use_container_width=True)
+        with cr: st.plotly_chart(chart_sector_donut(eq), key="pc_2",use_container_width=True)
+        st.plotly_chart(chart_performance_attribution(eq,m["ev"]), key="pc_3",use_container_width=True)
+        st.plotly_chart(chart_sector_performance(eq), key="pc_4",use_container_width=True)
         cl,cr = st.columns([3,2])
-        with cl: st.plotly_chart(chart_market_vs_cost(eq),use_container_width=True)
+        with cl: st.plotly_chart(chart_market_vs_cost(eq), key="pc_5",use_container_width=True)
         with cr:
             from plotly.subplots import make_subplots as _msp
             cmap={"Equities":VIOLET,"Cash":AZURE,"Funds":GOLD,"Fixed Income":TEAL}
@@ -1672,9 +1672,9 @@ def main():
                 tm_layout=T(title="Asset Class Allocation")
                 tm_layout["height"]=300; tm_layout["margin"]=dict(l=8,r=8,t=48,b=8)
                 fig_tm.update_layout(**tm_layout)
-                st.plotly_chart(fig_tm,use_container_width=True)
-        st.plotly_chart(chart_portfolio_efficiency(eq),use_container_width=True)
-        st.plotly_chart(chart_pl_waterfall(eq),use_container_width=True)
+                st.plotly_chart(fig_tm, key="pc_6",use_container_width=True)
+        st.plotly_chart(chart_portfolio_efficiency(eq), key="pc_7",use_container_width=True)
+        st.plotly_chart(chart_pl_waterfall(eq), key="pc_8",use_container_width=True)
         # Price comparison
         df_pc=pd.DataFrame(eq); df_pc=df_pc[df_pc["live_price"].notna()].copy()
         if not df_pc.empty:
@@ -1688,7 +1688,7 @@ def main():
                     text=f"{row['pct_diff']:+.1f}%",showarrow=False,yshift=12,
                     font=dict(color=c,size=9,family="DM Mono"))
             fig_pc.update_layout(**T(title="Statement vs Live Price",yt="GHS per Share"),barmode="group",height=320)
-            st.plotly_chart(fig_pc,use_container_width=True)
+            st.plotly_chart(fig_pc, key="pc_9",use_container_width=True)
         # Sector table
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("Sector Breakdown")
@@ -1734,19 +1734,19 @@ def main():
             st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
             shdr("🌡️ Real Returns vs Ghana Inflation",
                  "After ~23% avg annual inflation, many nominal gains are real losses")
-            st.plotly_chart(rr_fig,use_container_width=True)
+            st.plotly_chart(rr_fig, key="pc_10",use_container_width=True)
 
         # Risk / Return scatter
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("Risk / Return Matrix","Bubble size = Market Value")
-        st.plotly_chart(chart_risk_return_scatter(eq,m["ev"]),use_container_width=True)
+        st.plotly_chart(chart_risk_return_scatter(eq,m["ev"]), key="pc_11",use_container_width=True)
 
         # Drawdown
         dd_fig=chart_drawdown(txs,m["tv"])
         if dd_fig:
             st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
             shdr("Portfolio Drawdown from Peak")
-            st.plotly_chart(dd_fig,use_container_width=True)
+            st.plotly_chart(dd_fig, key="pc_12",use_container_width=True)
 
         # Goals & Projection
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
@@ -1763,7 +1763,7 @@ def main():
             proj_result = project_portfolio(m["tv"], m["cagr"], target_val, yrs_max)
             if proj_result:
                 df_proj, hit_date = proj_result
-                st.plotly_chart(chart_projection(df_proj,m["tv"],target_val,hit_date),use_container_width=True)
+                st.plotly_chart(chart_projection(df_proj,m["tv"],target_val,hit_date), key="pc_13",use_container_width=True)
                 if hit_date:
                     years_to_target = (hit_date - datetime.now()).days / 365.25
                     st.markdown(alert_box(
@@ -1784,7 +1784,7 @@ def main():
         if hm_fig:
             st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
             shdr("Monthly Net Cash Flow Calendar")
-            st.plotly_chart(hm_fig,use_container_width=True)
+            st.plotly_chart(hm_fig, key="pc_14",use_container_width=True)
 
         # Per-stock analytics table
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
@@ -1809,13 +1809,13 @@ def main():
         be=chart_breakeven(eq)
         if be:
             shdr("🎯 Break-even Analysis")
-            st.plotly_chart(be,use_container_width=True)
+            st.plotly_chart(be, key="pc_15",use_container_width=True)
         else:
             st.success("🎉 All positions are currently profitable — no break-even analysis needed.")
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("⚖️ Concentration Risk (HHI)")
         cf,hhi_val,risk_lbl,rc=chart_concentration(eq)
-        st.plotly_chart(cf,use_container_width=True)
+        st.plotly_chart(cf, key="pc_16",use_container_width=True)
         st.markdown(f"<div style='text-align:center;color:{p.MUTED};font-size:.82rem;margin-top:-8px;font-family:DM Mono,monospace;'>"
                     f"HHI: <b style='color:{rc}'>{hhi_val}</b> — <b style='color:{rc}'>{risk_lbl}</b> &nbsp;·&nbsp;"
                     f"<span style='color:{EMERALD}'>Low &lt;1500</span> · <span style='color:{AMBER}'>Moderate 1500–2500</span> · <span style='color:{RUBY}'>High &gt;2500</span>"
@@ -1871,7 +1871,7 @@ def main():
         fig_sim.add_trace(go.Bar(name="Simulated",x=sim_df["ticker"],y=sim_df["simulated"],
             marker=dict(color=[EMERALD if s>c else RUBY for s,c in zip(sim_df["simulated"],sim_df["current"])],opacity=0.9)))
         fig_sim.update_layout(**T(title="Current vs Simulated Market Value",yt="GHS"),barmode="group",height=320)
-        st.plotly_chart(fig_sim,use_container_width=True)
+        st.plotly_chart(fig_sim, key="pc_17",use_container_width=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     # TAB 5 — CASH FLOW
@@ -1879,15 +1879,15 @@ def main():
     with tab5:
         shdr("Cash Flow & History")
         cf=chart_cashflow(txs)
-        if cf: st.plotly_chart(cf,use_container_width=True)
+        if cf: st.plotly_chart(cf, key="pc_18",use_container_width=True)
         div_c=chart_dividend_timeline(txs)
         if div_c:
             shdr("💎 Dividend Income Timeline")
-            st.plotly_chart(div_c,use_container_width=True)
+            st.plotly_chart(div_c, key="pc_19",use_container_width=True)
         cl,cr=st.columns([3,2])
         with cl:
             cml=chart_cumulative(txs,m["tv"])
-            if cml: st.plotly_chart(cml,use_container_width=True)
+            if cml: st.plotly_chart(cml, key="pc_20",use_container_width=True)
         with cr:
             df_r=pd.DataFrame(txs).sort_values("date")
             if not df_r.empty:
@@ -1900,7 +1900,7 @@ def main():
                 fig_r.add_trace(go.Scatter(x=df_r["date"],y=df_r["cumul"],mode="lines",
                     line=dict(color=GOLD,width=1.5,dash="dot"),name="Net Invested"))
                 fig_r.update_layout(**T(title="Estimated Portfolio Value Over Time",xt="Date",yt="GHS"),height=320)
-                st.plotly_chart(fig_r,use_container_width=True)
+                st.plotly_chart(fig_r, key="pc_21",use_container_width=True)
 
         # DRIP Simulator
         st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
@@ -1944,7 +1944,7 @@ def main():
             with f4: st.markdown(kpi("Fee Drag on Portfolio",
                 f"{total_fees/m['tv']*100:.2f}%",
                 "Total fees / current portfolio value","vi",icon="🔩"),unsafe_allow_html=True)
-            st.plotly_chart(chart_fees_over_time(fee_rows),use_container_width=True)
+            st.plotly_chart(chart_fees_over_time(fee_rows), key="pc_22",use_container_width=True)
             # Fee breakdown table
             fee_breakdown_df = pd.DataFrame({"Fee Component":list(IC_FEES.keys()),
                 "Rate":[f"{v*100:.2f}%" for v in IC_FEES.values()],
@@ -2085,16 +2085,16 @@ def main():
                     "Each PDF adds a data point to your equity curve.")
         else:
             df_tl = build_timeline(statements_sorted)
-            st.plotly_chart(chart_timeline(df_tl),use_container_width=True)
+            st.plotly_chart(chart_timeline(df_tl), key="pc_23",use_container_width=True)
             cl,cr=st.columns(2)
-            with cl: st.plotly_chart(chart_timeline_roi(df_tl),use_container_width=True)
+            with cl: st.plotly_chart(chart_timeline_roi(df_tl), key="pc_24",use_container_width=True)
             with cr:
                 # n_stocks over time
                 fig_ns=go.Figure(go.Scatter(x=df_tl["date"],y=df_tl["n_stocks"],mode="lines+markers",
                     line=dict(color=VIOLET,width=2.5),marker=dict(size=8,color=VIOLET,line=dict(color=p.BG,width=2)),
                     text=df_tl["label"],hovertemplate="<b>%{text}</b><br>Positions: %{y}<extra></extra>"))
                 fig_ns.update_layout(**T(title="Number of Positions Over Time",yt="# Stocks"),height=300)
-                st.plotly_chart(fig_ns,use_container_width=True)
+                st.plotly_chart(fig_ns, key="pc_25",use_container_width=True)
 
             # M-o-M table
             st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
@@ -2196,8 +2196,8 @@ def main():
                     f"</div>",unsafe_allow_html=True)
             st.markdown("</div>",unsafe_allow_html=True)
         with r2:
-            st.plotly_chart(chart_sector_donut(eq),use_container_width=True)
-            st.plotly_chart(chart_pl_waterfall(eq),use_container_width=True)
+            st.plotly_chart(chart_sector_donut(eq), key="pc_26",use_container_width=True)
+            st.plotly_chart(chart_pl_waterfall(eq), key="pc_27",use_container_width=True)
 
     # ── Footer ────────────────────────────────────────────────────────────────
     st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
