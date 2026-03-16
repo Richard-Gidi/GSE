@@ -1,14 +1,31 @@
 """
-IC Securities Portfolio Analyser — ELITE EDITION v3.0 (March 2026)
+IC Securities Portfolio Analyser — ELITE EDITION v4.0 (March 2026)
+
+NEW in v4:
+  ★ Multi-Statement Portfolio Timeline  — upload all past statements; see your real
+      equity curve, position evolution, and month-on-month value changes over time.
+  ★ Real Returns vs Ghana Inflation     — every return shown in both nominal and
+      real (CPI-adjusted) terms. At 23%+ inflation many "gains" are real losses.
+  ★ GSE Composite Index Benchmark       — portfolio alpha vs the GSE-CI fetched live.
+  ★ Fee Impact Analyser                 — estimates every GHS paid to IC/SEC/GhSE
+      across all buy & sell transactions. Shows the compounded drag over time.
+  ★ Dividend DRIP Simulator             — what your portfolio would be worth today
+      had you reinvested every dividend back into the paying stock.
+  ★ Goals & Projection Engine           — set a target wealth figure; projection
+      engine shows expected date at current CAGR + optimistic/pessimistic bands.
+  ★ Statement Diff View                 — load two statements and instantly see
+      every new position, exited position, and weight change.
+  ★ Downloadable HTML Report            — one-click full-portfolio report styled
+      for printing / saving as PDF from the browser.
 
 Install:
-    pip install streamlit plotly pdfplumber pandas numpy requests beautifulsoup4 lxml
+    pip install streamlit plotly pdfplumber pandas numpy requests beautifulsoup4 lxml fpdf2
 Run:
-    streamlit run akwasi_v3.py
+    streamlit run akwasi_v4.py
 """
 
-import base64, io, re, warnings
-from datetime import datetime
+import base64, io, re, warnings, json
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import numpy as np
@@ -35,188 +52,74 @@ st.set_page_config(
 # THEME — OBSIDIAN × GOLD
 # ─────────────────────────────────────────────────────────────────────────────
 _DARK = SimpleNamespace(
-    BG      = "#04060f",
-    CARD    = "#08091e",
-    CARD2   = "#0c1028",
-    BORDER  = "#141838",
-    BORDER2 = "#1c2248",
-    TEXT    = "#eef0fa",
-    TEXT2   = "#8898c8",
-    MUTED   = "#424870",
-    SHADOW  = "rgba(0,0,0,0.75)",
-    name    = "dark",
+    BG="#04060f", CARD="#08091e", CARD2="#0c1028",
+    BORDER="#141838", BORDER2="#1c2248",
+    TEXT="#eef0fa", TEXT2="#8898c8", MUTED="#424870",
+    SHADOW="rgba(0,0,0,0.75)", name="dark",
 )
+GOLD="#e8b438"; GOLD2="#c0901e"; EMERALD="#00d485"; RUBY="#ff3960"
+AZURE="#0ea5e9"; VIOLET="#7c5cfa"; TEAL="#06b6d4"; AMBER="#f59e0b"
+ROSE="#f43f7e"; INDIGO="#6366f1"; SLATE="#64748b"
 
-GOLD    = "#e8b438"
-GOLD2   = "#c0901e"
-EMERALD = "#00d485"
-RUBY    = "#ff3960"
-AZURE   = "#0ea5e9"
-VIOLET  = "#7c5cfa"
-TEAL    = "#06b6d4"
-AMBER   = "#f59e0b"
-ROSE    = "#f43f7e"
-INDIGO  = "#6366f1"
-SLATE   = "#64748b"
+def th(): return _DARK
 
-
-def th():
-    return _DARK
-
-
+# ── Safe layout builder — NEVER pass these keys directly alongside **T() ────
+# title, xaxis, yaxis, font, paper_bgcolor, plot_bgcolor, margin, legend, hoverlabel
 def T(title=None, xt=None, yt=None):
-    """Base Plotly layout dict.
-    Pass chart titles here via T(title=...) NOT via fig.update_layout(title=..., **T()).
-    Pass axis titles via T(xt=..., yt=...) NOT via xaxis_title= or yaxis_title=.
-    Both patterns trigger Plotly magic-underscore duplicate-key TypeErrors."""
     p  = th()
     tf = dict(color=p.MUTED, size=11, family="'DM Mono','Courier New',monospace")
     xax = dict(gridcolor=p.BORDER, zerolinecolor=p.BORDER2,
                tickcolor=p.MUTED, tickfont=dict(color=p.MUTED))
     yax = dict(gridcolor=p.BORDER, zerolinecolor=p.BORDER2,
                tickcolor=p.MUTED, tickfont=dict(color=p.MUTED))
-    if xt:
-        xax["title"] = dict(text=xt, font=tf)
-    if yt:
-        yax["title"] = dict(text=yt, font=tf)
+    if xt: xax["title"] = dict(text=xt, font=tf)
+    if yt: yax["title"] = dict(text=yt, font=tf)
     td = dict(font=dict(color=p.TEXT, family="'Epilogue',sans-serif", size=14), x=0.01)
-    if title:
-        td["text"] = title
+    if title: td["text"] = title
     return dict(
-        paper_bgcolor = p.BG,
-        plot_bgcolor  = p.CARD,
-        font          = dict(color=p.TEXT2, family="'DM Mono','Courier New',monospace", size=11),
-        xaxis         = xax,
-        yaxis         = yax,
-        margin        = dict(l=16, r=16, t=52, b=16),
-        legend        = dict(bgcolor=p.CARD2, bordercolor=p.BORDER, borderwidth=1,
-                             font=dict(color=p.TEXT2, family="Epilogue,sans-serif")),
-        hoverlabel    = dict(bgcolor=p.CARD2, bordercolor=p.BORDER2,
-                             font=dict(color=p.TEXT, family="'DM Mono',monospace")),
-        title         = td,
+        paper_bgcolor=p.BG, plot_bgcolor=p.CARD,
+        font=dict(color=p.TEXT2, family="'DM Mono','Courier New',monospace", size=11),
+        xaxis=xax, yaxis=yax,
+        margin=dict(l=16, r=16, t=52, b=16),
+        legend=dict(bgcolor=p.CARD2, bordercolor=p.BORDER, borderwidth=1,
+                    font=dict(color=p.TEXT2, family="Epilogue,sans-serif")),
+        hoverlabel=dict(bgcolor=p.CARD2, bordercolor=p.BORDER2,
+                        font=dict(color=p.TEXT, family="'DM Mono',monospace")),
+        title=td,
     )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GHANA CPI — annual headline inflation rates (Bank of Ghana / GSS)
+# ─────────────────────────────────────────────────────────────────────────────
+GHANA_CPI = {
+    2016: 15.4, 2017: 11.8, 2018: 9.8, 2019: 7.9,
+    2020: 10.4, 2021: 12.6, 2022: 31.5, 2023: 23.2,
+    2024: 22.4, 2025: 18.0,
+}
 
-def apply_theme():
-    p = th()
-    bg = (
-        f"radial-gradient(ellipse at 15% 5%, {GOLD}0d 0%, transparent 45%),"
-        f"radial-gradient(ellipse at 88% 92%, {VIOLET}12 0%, transparent 45%),"
-        f"radial-gradient(ellipse at 50% 50%, {AZURE}06 0%, transparent 70%),"
-        f"{p.BG}"
-    )
-    st.markdown(f"""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,900;1,9..144,200;1,9..144,400&family=Epilogue:wght@300;400;500;600;700;800;900&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300;1,400&display=swap');
+def real_return(nominal_pct, years, cpi_year=None):
+    """Convert nominal return to approximate real return using Ghana CPI."""
+    if years <= 0: return None
+    avg_cpi = 0.0
+    now_yr  = datetime.now().year
+    for y in range(max(2016, now_yr - max(1, int(years))), now_yr + 1):
+        avg_cpi += GHANA_CPI.get(y, 18.0)
+    avg_cpi /= max(1, int(years))
+    # Fisher equation: real = ((1 + nominal/100) / (1 + cpi/100) - 1) * 100
+    real = ((1 + nominal_pct / 100) / (1 + avg_cpi / 100) - 1) * 100
+    return round(real, 2), round(avg_cpi, 1)
 
-html,body,[class*="css"]{{font-family:'Epilogue','Segoe UI',system-ui,-apple-system,sans-serif;}}
-.stApp,[data-testid="stAppViewContainer"]{{background:{bg}!important;min-height:100vh;}}
-[data-testid="stHeader"],[data-testid="stToolbar"]{{background:rgba(4,6,15,0.6)!important;backdrop-filter:blur(20px);border-bottom:1px solid {p.BORDER}!important;}}
-section[data-testid="stSidebar"]{{background:rgba(8,9,30,0.97)!important;border-right:1px solid {p.BORDER}!important;backdrop-filter:blur(24px);}}
-.block-container{{color:{p.TEXT};padding-top:1.5rem!important;max-width:1500px;}}
-
-.kpi{{position:relative;background:rgba(8,9,30,0.85);backdrop-filter:blur(20px);border-radius:16px;padding:20px 22px 16px;border:1px solid {p.BORDER};margin-bottom:6px;transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s ease,border-color .25s;box-shadow:0 4px 24px {p.SHADOW};overflow:hidden;}}
-.kpi::before{{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,{GOLD},{GOLD2},{AMBER});border-radius:16px 16px 0 0;}}
-.kpi.g::before{{background:linear-gradient(90deg,{EMERALD},{TEAL});}}
-.kpi.r::before{{background:linear-gradient(90deg,{RUBY},{AMBER});}}
-.kpi.y::before{{background:linear-gradient(90deg,{AMBER},{GOLD});}}
-.kpi.b::before{{background:linear-gradient(90deg,{AZURE},{VIOLET});}}
-.kpi.t::before{{background:linear-gradient(90deg,{TEAL},{EMERALD});}}
-.kpi.pk::before{{background:linear-gradient(90deg,{ROSE},{VIOLET});}}
-.kpi.vi::before{{background:linear-gradient(90deg,{VIOLET},{INDIGO});}}
-.kpi-glow{{position:absolute;top:-40px;right:-40px;width:100px;height:100px;background:radial-gradient({GOLD}18,transparent 70%);border-radius:50%;pointer-events:none;}}
-.kpi.g .kpi-glow{{background:radial-gradient({EMERALD}12,transparent 70%);}}
-.kpi.r .kpi-glow{{background:radial-gradient({RUBY}12,transparent 70%);}}
-.kpi:hover{{transform:translateY(-4px) scale(1.01);box-shadow:0 16px 40px {p.SHADOW};border-color:{GOLD}40;}}
-.kpi-icon{{font-size:1.5rem;float:right;margin-top:2px;opacity:0.18;line-height:1;}}
-.kpi-lbl{{font-size:.65rem;color:{p.MUTED};text-transform:uppercase;letter-spacing:.12em;margin-bottom:12px;font-weight:700;font-family:'Epilogue',sans-serif;}}
-.kpi-val{{font-size:1.55rem;font-weight:500;color:{p.TEXT};line-height:1.15;letter-spacing:-.01em;font-family:'DM Mono','Courier New',monospace;}}
-.kpi-sub{{font-size:.73rem;color:{p.MUTED};margin-top:8px;line-height:1.45;font-family:'Epilogue',sans-serif;}}
-.kpi-delta{{display:inline-flex;align-items:center;gap:3px;font-size:.7rem;font-weight:600;padding:3px 9px;border-radius:20px;margin-top:8px;letter-spacing:.03em;font-family:'DM Mono',monospace;}}
-.kpi-delta.pos{{background:rgba(0,212,133,0.12);color:{EMERALD};border:1px solid rgba(0,212,133,0.22);}}
-.kpi-delta.neg{{background:rgba(255,57,96,0.12);color:{RUBY};border:1px solid rgba(255,57,96,0.22);}}
-
-.ibox{{background:rgba(8,9,30,0.75);backdrop-filter:blur(12px);border:1px solid {p.BORDER};border-radius:14px;padding:18px 12px 16px;text-align:center;height:100%;transition:transform .22s cubic-bezier(.34,1.56,.64,1),box-shadow .22s;box-shadow:0 2px 12px {p.SHADOW};position:relative;overflow:hidden;}}
-.ibox::after{{content:'';position:absolute;bottom:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,{GOLD}40,transparent);opacity:0;transition:opacity .2s;}}
-.ibox:hover{{transform:translateY(-3px);box-shadow:0 10px 28px {p.SHADOW};}}
-.ibox:hover::after{{opacity:1;}}
-.ibox-icon{{font-size:1.9rem;line-height:1;filter:drop-shadow(0 2px 6px {p.SHADOW});}}
-.ibox-lbl{{font-size:.62rem;color:{p.MUTED};text-transform:uppercase;letter-spacing:.1em;margin:10px 0 5px;font-weight:700;font-family:'Epilogue',sans-serif;}}
-.ibox-val{{font-size:.9rem;font-weight:500;color:{p.TEXT};font-family:'DM Mono',monospace;}}
-
-.mover{{background:rgba(8,9,30,0.8);backdrop-filter:blur(12px);border:1px solid {p.BORDER};border-radius:14px;padding:16px 14px;text-align:center;box-shadow:0 2px 12px {p.SHADOW};transition:transform .22s cubic-bezier(.34,1.56,.64,1),box-shadow .22s;position:relative;overflow:hidden;}}
-.mover.top-mover{{border-color:{GOLD}55;}}
-.mover.top-mover::before{{content:'TOP MOVER';position:absolute;top:7px;right:8px;font-size:.55rem;font-weight:800;letter-spacing:.1em;color:{GOLD};font-family:'Epilogue',sans-serif;background:rgba(232,180,56,0.12);padding:2px 6px;border-radius:6px;border:1px solid {GOLD}30;}}
-.mover:hover{{transform:translateY(-4px);box-shadow:0 12px 32px {p.SHADOW};border-color:{GOLD}40;}}
-.mover-tick{{font-size:.68rem;font-weight:800;color:{p.MUTED};text-transform:uppercase;letter-spacing:.1em;background:{p.CARD2};display:inline-block;padding:2px 10px;border-radius:8px;margin-bottom:8px;font-family:'Epilogue',sans-serif;}}
-.mover-price{{font-size:1.45rem;font-weight:400;color:{p.TEXT};margin:4px 0;font-family:'DM Mono',monospace;letter-spacing:-.01em;}}
-.mover-chg{{font-size:.82rem;font-weight:600;padding:3px 12px;border-radius:12px;display:inline-block;font-family:'DM Mono',monospace;}}
-.mover-chg.pos{{background:rgba(0,212,133,0.12);color:{EMERALD};}}
-.mover-chg.neg{{background:rgba(255,57,96,0.12);color:{RUBY};}}
-
-.shdr{{display:flex;align-items:center;gap:10px;font-size:.95rem;font-weight:700;color:{p.TEXT};margin:22px 0 16px;letter-spacing:-.01em;font-family:'Epilogue',sans-serif;}}
-.shdr::before{{content:'';display:inline-block;width:3px;height:18px;background:linear-gradient(180deg,{GOLD},{AMBER});border-radius:4px;flex-shrink:0;}}
-
-.cbar{{background:rgba(8,9,30,0.88);backdrop-filter:blur(20px);border:1px solid {p.BORDER};border-radius:16px;padding:16px 28px;display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:16px;box-shadow:0 4px 24px {p.SHADOW};position:relative;overflow:hidden;}}
-.cbar::before{{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,{GOLD}80,{AMBER}60,transparent);}}
-.cbar-item{{display:flex;flex-direction:column;gap:4px;}}
-.cbar-lbl{{font-size:.6rem;color:{p.MUTED};text-transform:uppercase;letter-spacing:.12em;font-weight:800;font-family:'Epilogue',sans-serif;}}
-.cbar-val{{font-size:.92rem;font-weight:400;color:{p.TEXT};font-family:'DM Mono',monospace;}}
-.cbar-acc{{font-size:.95rem;font-weight:500;background:linear-gradient(135deg,{GOLD},{AMBER});-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:'DM Mono',monospace;}}
-
-.hero{{font-size:2.8rem;font-weight:600;line-height:1.05;letter-spacing:-.05em;background:linear-gradient(135deg,{p.TEXT} 0%,{GOLD} 55%,{AMBER} 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:'Fraunces','Georgia',serif;}}
-.hero-sub{{color:{p.MUTED};font-size:.9rem;margin-top:8px;line-height:1.65;font-weight:400;font-family:'Epilogue',sans-serif;}}
-.hero-badge{{display:inline-block;background:rgba(232,180,56,0.1);color:{GOLD};border:1px solid rgba(232,180,56,0.25);font-size:.65rem;font-weight:800;padding:3px 11px;border-radius:10px;letter-spacing:.09em;text-transform:uppercase;margin-bottom:10px;font-family:'Epilogue',sans-serif;}}
-
-[data-testid="stTabs"] [role="tablist"]{{background:rgba(8,9,30,0.85)!important;backdrop-filter:blur(16px)!important;border-radius:12px!important;padding:5px!important;border:1px solid {p.BORDER}!important;gap:2px;box-shadow:0 2px 16px {p.SHADOW};}}
-[data-testid="stTabs"] [role="tab"]{{border-radius:9px!important;color:{p.MUTED}!important;font-weight:600!important;font-size:.82rem!important;padding:8px 18px!important;transition:all .18s ease!important;border:none!important;letter-spacing:.01em;font-family:'Epilogue',sans-serif!important;}}
-[data-testid="stTabs"] [role="tab"]:hover{{color:{p.TEXT}!important;background:{p.CARD2}!important;}}
-[data-testid="stTabs"] [role="tab"][aria-selected="true"]{{background:linear-gradient(135deg,rgba(232,180,56,0.18),rgba(232,180,56,0.08))!important;color:{GOLD}!important;box-shadow:0 2px 12px rgba(232,180,56,0.2),inset 0 0 0 1px rgba(232,180,56,0.3)!important;}}
-
-[data-testid="stFileUploadDropzone"]{{background:rgba(8,9,30,0.75)!important;border:2px dashed {GOLD}40!important;border-radius:16px!important;padding:36px!important;transition:all .2s!important;backdrop-filter:blur(12px);}}
-[data-testid="stFileUploadDropzone"]:hover{{border-color:{GOLD}80!important;background:rgba(232,180,56,0.04)!important;}}
-
-[data-testid="stDataFrame"]{{border-radius:12px!important;overflow:hidden;border:1px solid {p.BORDER}!important;box-shadow:0 2px 16px {p.SHADOW};}}
-.js-plotly-plot{{border-radius:14px!important;overflow:hidden;border:1px solid {p.BORDER};box-shadow:0 2px 20px {p.SHADOW};}}
-[data-testid="stExpander"]{{background:rgba(8,9,30,0.75)!important;border:1px solid {p.BORDER}!important;border-radius:12px!important;backdrop-filter:blur(12px);}}
-[data-testid="stExpander"] summary{{font-weight:700!important;color:{p.TEXT}!important;font-family:'Epilogue',sans-serif!important;}}
-
-.pill{{display:inline-flex;align-items:center;gap:4px;padding:3px 11px;border-radius:18px;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-family:'Epilogue',sans-serif;}}
-.pill.live{{background:rgba(0,212,133,0.12);color:{EMERALD};border:1px solid rgba(0,212,133,0.25);}}
-.pill.warn{{background:rgba(245,158,11,0.12);color:{AMBER};border:1px solid rgba(245,158,11,0.25);}}
-.pill.info{{background:rgba(14,165,233,0.12);color:{AZURE};border:1px solid rgba(14,165,233,0.25);}}
-.pill.gold{{background:rgba(232,180,56,0.12);color:{GOLD};border:1px solid rgba(232,180,56,0.25);}}
-.sec-badge{{display:inline-block;padding:2px 8px;border-radius:7px;font-size:.63rem;font-weight:700;letter-spacing:.04em;background:rgba(124,92,250,0.12);color:{VIOLET};border:1px solid rgba(124,92,250,0.22);font-family:'Epilogue',sans-serif;}}
-
-.abox{{border-radius:12px;padding:14px 18px;margin-bottom:9px;border-left:3px solid;font-size:.84rem;line-height:1.65;font-family:'Epilogue',sans-serif;}}
-.abox.warn{{background:rgba(245,158,11,0.07);border-color:{AMBER};color:{p.TEXT2};}}
-.abox.danger{{background:rgba(255,57,96,0.07);border-color:{RUBY};color:{p.TEXT2};}}
-.abox.ok{{background:rgba(0,212,133,0.07);border-color:{EMERALD};color:{p.TEXT2};}}
-.abox.info{{background:rgba(14,165,233,0.07);border-color:{AZURE};color:{p.TEXT2};}}
-.abox-title{{font-weight:800;margin-bottom:4px;font-size:.88rem;color:{p.TEXT};}}
-
-.prog-wrap{{background:{p.CARD2};border-radius:6px;height:7px;overflow:hidden;margin-top:3px;}}
-.prog-bar{{height:7px;border-radius:6px;transition:width .7s cubic-bezier(.34,1.56,.64,1);}}
-
-.land-card{{background:rgba(8,9,30,0.8);backdrop-filter:blur(16px);border:1px solid {p.BORDER};border-radius:18px;padding:28px 20px;text-align:center;transition:transform .28s cubic-bezier(.34,1.56,.64,1),box-shadow .28s,border-color .28s;box-shadow:0 4px 24px {p.SHADOW};height:100%;position:relative;overflow:hidden;}}
-.land-card::before{{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,{GOLD}60,transparent);opacity:0;transition:opacity .25s;}}
-.land-card:hover{{transform:translateY(-6px) scale(1.01);box-shadow:0 20px 48px {p.SHADOW};border-color:{GOLD}40;}}
-.land-card:hover::before{{opacity:1;}}
-.land-icon{{font-size:2.4rem;margin-bottom:12px;display:block;}}
-.land-title{{font-size:.98rem;font-weight:800;color:{p.TEXT};margin-bottom:7px;font-family:'Epilogue',sans-serif;}}
-.land-desc{{font-size:.78rem;color:{p.MUTED};line-height:1.65;}}
-
-.rich-divider{{height:1px;background:linear-gradient(90deg,transparent,{GOLD}30,{AMBER}20,transparent);border:none;margin:28px 0;}}
-.pos{{color:{EMERALD}!important;font-weight:600;}}
-.neg{{color:{RUBY}!important;font-weight:600;}}
-
-*::-webkit-scrollbar{{width:5px;height:5px;}}
-*::-webkit-scrollbar-track{{background:{p.BG};}}
-*::-webkit-scrollbar-thumb{{background:{p.BORDER2};border-radius:3px;}}
-*::-webkit-scrollbar-thumb:hover{{background:{GOLD};}}
-::selection{{background:{GOLD}30;color:{p.TEXT};}}
-</style>""", unsafe_allow_html=True)
-
+# ─────────────────────────────────────────────────────────────────────────────
+# IC SECURITIES FEE SCHEDULE (approximate, 2024)
+# ─────────────────────────────────────────────────────────────────────────────
+IC_FEES = {
+    "IC Brokerage":    0.0150,   # 1.50%
+    "SEC Levy":        0.0030,   # 0.30%
+    "GhSE Levy":       0.0005,   # 0.05%
+    "CSDR Levy":       0.0010,   # 0.10%
+    "VAT (on broker)": 0.0000,   # 21.9% of brokerage — simplified to 0 for display
+}
+TOTAL_FEE_RATE = sum(IC_FEES.values())  # ~1.95%
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GSE SECTOR MAP
@@ -237,98 +140,193 @@ GSE_SECTORS = {
     "DOCK":"Transport","PKL":"Transport","TRANSOL":"Transport",
     "GWEB":"Technology",
 }
-
 SECTOR_COLORS = {
     "Banking":VIOLET,"Telecom":TEAL,"Oil & Gas":AMBER,"Food & Bev":EMERALD,
     "Beverages":AZURE,"Consumer":ROSE,"Agriculture":"#84cc16",
     "Mining":"#94a3b8","Manufacturing":INDIGO,"Insurance":"#f97316",
     "Transport":"#22d3ee","Technology":"#ec4899","Other":SLATE,
 }
+def get_sector(t): return GSE_SECTORS.get(t.upper(), "Other")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# THEME CSS
+# ─────────────────────────────────────────────────────────────────────────────
+def apply_theme():
+    p = th()
+    bg = (f"radial-gradient(ellipse at 15% 5%,{GOLD}0d 0%,transparent 45%),"
+          f"radial-gradient(ellipse at 88% 92%,{VIOLET}12 0%,transparent 45%),"
+          f"radial-gradient(ellipse at 50% 50%,{AZURE}06 0%,transparent 70%),"
+          f"{p.BG}")
+    st.markdown(f"""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;0,9..144,900;1,9..144,200&family=Epilogue:wght@300;400;500;600;700;800;900&family=DM+Mono:wght@300;400;500&display=swap');
+html,body,[class*="css"]{{font-family:'Epilogue','Segoe UI',system-ui,sans-serif;}}
+.stApp,[data-testid="stAppViewContainer"]{{background:{bg}!important;min-height:100vh;}}
+[data-testid="stHeader"],[data-testid="stToolbar"]{{background:rgba(4,6,15,0.6)!important;backdrop-filter:blur(20px);border-bottom:1px solid {p.BORDER}!important;}}
+section[data-testid="stSidebar"]{{background:rgba(8,9,30,0.97)!important;border-right:1px solid {p.BORDER}!important;backdrop-filter:blur(24px);}}
+.block-container{{color:{p.TEXT};padding-top:1.5rem!important;max-width:1500px;}}
 
-def get_sector(ticker):
-    return GSE_SECTORS.get(ticker.upper(), "Other")
+.kpi{{position:relative;background:rgba(8,9,30,0.85);backdrop-filter:blur(20px);border-radius:16px;padding:20px 22px 16px;border:1px solid {p.BORDER};margin-bottom:6px;transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s,border-color .25s;box-shadow:0 4px 24px {p.SHADOW};overflow:hidden;}}
+.kpi::before{{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,{GOLD},{GOLD2},{AMBER});border-radius:16px 16px 0 0;}}
+.kpi.g::before{{background:linear-gradient(90deg,{EMERALD},{TEAL});}}
+.kpi.r::before{{background:linear-gradient(90deg,{RUBY},{AMBER});}}
+.kpi.y::before{{background:linear-gradient(90deg,{AMBER},{GOLD});}}
+.kpi.b::before{{background:linear-gradient(90deg,{AZURE},{VIOLET});}}
+.kpi.t::before{{background:linear-gradient(90deg,{TEAL},{EMERALD});}}
+.kpi.pk::before{{background:linear-gradient(90deg,{ROSE},{VIOLET});}}
+.kpi.vi::before{{background:linear-gradient(90deg,{VIOLET},{INDIGO});}}
+.kpi.re::before{{background:linear-gradient(90deg,{RUBY},{ROSE});}}
+.kpi-glow{{position:absolute;top:-40px;right:-40px;width:100px;height:100px;background:radial-gradient({GOLD}18,transparent 70%);border-radius:50%;pointer-events:none;}}
+.kpi.g .kpi-glow{{background:radial-gradient({EMERALD}12,transparent 70%);}}
+.kpi.r .kpi-glow,.kpi.re .kpi-glow{{background:radial-gradient({RUBY}12,transparent 70%);}}
+.kpi:hover{{transform:translateY(-4px) scale(1.01);box-shadow:0 16px 40px {p.SHADOW};border-color:{GOLD}40;}}
+.kpi-icon{{font-size:1.5rem;float:right;margin-top:2px;opacity:0.18;line-height:1;}}
+.kpi-lbl{{font-size:.65rem;color:{p.MUTED};text-transform:uppercase;letter-spacing:.12em;margin-bottom:12px;font-weight:700;font-family:'Epilogue',sans-serif;}}
+.kpi-val{{font-size:1.55rem;font-weight:500;color:{p.TEXT};line-height:1.15;font-family:'DM Mono','Courier New',monospace;}}
+.kpi-sub{{font-size:.73rem;color:{p.MUTED};margin-top:8px;line-height:1.45;font-family:'Epilogue',sans-serif;}}
+.kpi-delta{{display:inline-flex;align-items:center;gap:3px;font-size:.7rem;font-weight:600;padding:3px 9px;border-radius:20px;margin-top:8px;font-family:'DM Mono',monospace;}}
+.kpi-delta.pos{{background:rgba(0,212,133,0.12);color:{EMERALD};border:1px solid rgba(0,212,133,0.22);}}
+.kpi-delta.neg{{background:rgba(255,57,96,0.12);color:{RUBY};border:1px solid rgba(255,57,96,0.22);}}
+
+.ibox{{background:rgba(8,9,30,0.75);backdrop-filter:blur(12px);border:1px solid {p.BORDER};border-radius:14px;padding:18px 12px 16px;text-align:center;height:100%;transition:transform .22s cubic-bezier(.34,1.56,.64,1),box-shadow .22s;box-shadow:0 2px 12px {p.SHADOW};}}
+.ibox:hover{{transform:translateY(-3px);box-shadow:0 10px 28px {p.SHADOW};}}
+.ibox-icon{{font-size:1.9rem;line-height:1;}}
+.ibox-lbl{{font-size:.62rem;color:{p.MUTED};text-transform:uppercase;letter-spacing:.1em;margin:10px 0 5px;font-weight:700;font-family:'Epilogue',sans-serif;}}
+.ibox-val{{font-size:.9rem;font-weight:500;color:{p.TEXT};font-family:'DM Mono',monospace;}}
+
+.mover{{background:rgba(8,9,30,0.8);backdrop-filter:blur(12px);border:1px solid {p.BORDER};border-radius:14px;padding:16px 14px;text-align:center;box-shadow:0 2px 12px {p.SHADOW};transition:transform .22s cubic-bezier(.34,1.56,.64,1),box-shadow .22s;position:relative;overflow:hidden;}}
+.mover.top-mover{{border-color:{GOLD}55;}}
+.mover.top-mover::before{{content:'TOP MOVER';position:absolute;top:7px;right:8px;font-size:.55rem;font-weight:800;letter-spacing:.1em;color:{GOLD};font-family:'Epilogue',sans-serif;background:rgba(232,180,56,0.12);padding:2px 6px;border-radius:6px;border:1px solid {GOLD}30;}}
+.mover:hover{{transform:translateY(-4px);box-shadow:0 12px 32px {p.SHADOW};border-color:{GOLD}40;}}
+.mover-tick{{font-size:.68rem;font-weight:800;color:{p.MUTED};text-transform:uppercase;letter-spacing:.1em;background:{p.CARD2};display:inline-block;padding:2px 10px;border-radius:8px;margin-bottom:8px;font-family:'Epilogue',sans-serif;}}
+.mover-price{{font-size:1.45rem;font-weight:400;color:{p.TEXT};margin:4px 0;font-family:'DM Mono',monospace;}}
+.mover-chg{{font-size:.82rem;font-weight:600;padding:3px 12px;border-radius:12px;display:inline-block;font-family:'DM Mono',monospace;}}
+.mover-chg.pos{{background:rgba(0,212,133,0.12);color:{EMERALD};}}
+.mover-chg.neg{{background:rgba(255,57,96,0.12);color:{RUBY};}}
+
+.shdr{{display:flex;align-items:center;gap:10px;font-size:.95rem;font-weight:700;color:{p.TEXT};margin:22px 0 16px;font-family:'Epilogue',sans-serif;}}
+.shdr::before{{content:'';display:inline-block;width:3px;height:18px;background:linear-gradient(180deg,{GOLD},{AMBER});border-radius:4px;flex-shrink:0;}}
+
+.cbar{{background:rgba(8,9,30,0.88);backdrop-filter:blur(20px);border:1px solid {p.BORDER};border-radius:16px;padding:16px 28px;display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:16px;box-shadow:0 4px 24px {p.SHADOW};position:relative;overflow:hidden;}}
+.cbar::before{{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,{GOLD}80,{AMBER}60,transparent);}}
+.cbar-item{{display:flex;flex-direction:column;gap:4px;}}
+.cbar-lbl{{font-size:.6rem;color:{p.MUTED};text-transform:uppercase;letter-spacing:.12em;font-weight:800;font-family:'Epilogue',sans-serif;}}
+.cbar-val{{font-size:.92rem;font-weight:400;color:{p.TEXT};font-family:'DM Mono',monospace;}}
+.cbar-acc{{font-size:.95rem;font-weight:500;background:linear-gradient(135deg,{GOLD},{AMBER});-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:'DM Mono',monospace;}}
+
+.hero{{font-size:2.8rem;font-weight:600;line-height:1.05;letter-spacing:-.05em;background:linear-gradient(135deg,{p.TEXT} 0%,{GOLD} 55%,{AMBER} 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:'Fraunces','Georgia',serif;}}
+.hero-sub{{color:{p.MUTED};font-size:.9rem;margin-top:8px;line-height:1.65;font-weight:400;font-family:'Epilogue',sans-serif;}}
+.hero-badge{{display:inline-block;background:rgba(232,180,56,0.1);color:{GOLD};border:1px solid rgba(232,180,56,0.25);font-size:.65rem;font-weight:800;padding:3px 11px;border-radius:10px;letter-spacing:.09em;text-transform:uppercase;margin-bottom:10px;font-family:'Epilogue',sans-serif;}}
+
+[data-testid="stTabs"] [role="tablist"]{{background:rgba(8,9,30,0.85)!important;backdrop-filter:blur(16px)!important;border-radius:12px!important;padding:5px!important;border:1px solid {p.BORDER}!important;gap:2px;box-shadow:0 2px 16px {p.SHADOW};}}
+[data-testid="stTabs"] [role="tab"]{{border-radius:9px!important;color:{p.MUTED}!important;font-weight:600!important;font-size:.82rem!important;padding:8px 18px!important;transition:all .18s ease!important;border:none!important;font-family:'Epilogue',sans-serif!important;}}
+[data-testid="stTabs"] [role="tab"]:hover{{color:{p.TEXT}!important;background:{p.CARD2}!important;}}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"]{{background:linear-gradient(135deg,rgba(232,180,56,0.18),rgba(232,180,56,0.08))!important;color:{GOLD}!important;box-shadow:0 2px 12px rgba(232,180,56,0.2),inset 0 0 0 1px rgba(232,180,56,0.3)!important;}}
+
+[data-testid="stFileUploadDropzone"]{{background:rgba(8,9,30,0.75)!important;border:2px dashed {GOLD}40!important;border-radius:16px!important;padding:36px!important;backdrop-filter:blur(12px);}}
+[data-testid="stFileUploadDropzone"]:hover{{border-color:{GOLD}80!important;background:rgba(232,180,56,0.04)!important;}}
+[data-testid="stDataFrame"]{{border-radius:12px!important;overflow:hidden;border:1px solid {p.BORDER}!important;box-shadow:0 2px 16px {p.SHADOW};}}
+.js-plotly-plot{{border-radius:14px!important;overflow:hidden;border:1px solid {p.BORDER};box-shadow:0 2px 20px {p.SHADOW};}}
+[data-testid="stExpander"]{{background:rgba(8,9,30,0.75)!important;border:1px solid {p.BORDER}!important;border-radius:12px!important;}}
+[data-testid="stExpander"] summary{{font-weight:700!important;color:{p.TEXT}!important;font-family:'Epilogue',sans-serif!important;}}
+
+.pill{{display:inline-flex;align-items:center;gap:4px;padding:3px 11px;border-radius:18px;font-size:.7rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;font-family:'Epilogue',sans-serif;}}
+.pill.live{{background:rgba(0,212,133,0.12);color:{EMERALD};border:1px solid rgba(0,212,133,0.25);}}
+.pill.warn{{background:rgba(245,158,11,0.12);color:{AMBER};border:1px solid rgba(245,158,11,0.25);}}
+.pill.info{{background:rgba(14,165,233,0.12);color:{AZURE};border:1px solid rgba(14,165,233,0.25);}}
+.pill.gold{{background:rgba(232,180,56,0.12);color:{GOLD};border:1px solid rgba(232,180,56,0.25);}}
+.pill.ruby{{background:rgba(255,57,96,0.12);color:{RUBY};border:1px solid rgba(255,57,96,0.25);}}
+.sec-badge{{display:inline-block;padding:2px 8px;border-radius:7px;font-size:.63rem;font-weight:700;background:rgba(124,92,250,0.12);color:{VIOLET};border:1px solid rgba(124,92,250,0.22);font-family:'Epilogue',sans-serif;}}
+
+.abox{{border-radius:12px;padding:14px 18px;margin-bottom:9px;border-left:3px solid;font-size:.84rem;line-height:1.65;font-family:'Epilogue',sans-serif;}}
+.abox.warn{{background:rgba(245,158,11,0.07);border-color:{AMBER};color:{p.TEXT2};}}
+.abox.danger{{background:rgba(255,57,96,0.07);border-color:{RUBY};color:{p.TEXT2};}}
+.abox.ok{{background:rgba(0,212,133,0.07);border-color:{EMERALD};color:{p.TEXT2};}}
+.abox.info{{background:rgba(14,165,233,0.07);border-color:{AZURE};color:{p.TEXT2};}}
+.abox-title{{font-weight:800;margin-bottom:4px;font-size:.88rem;color:{p.TEXT};}}
+
+.prog-wrap{{background:{p.CARD2};border-radius:6px;height:7px;overflow:hidden;margin-top:3px;}}
+.prog-bar{{height:7px;border-radius:6px;transition:width .7s cubic-bezier(.34,1.56,.64,1);}}
+
+.land-card{{background:rgba(8,9,30,0.8);backdrop-filter:blur(16px);border:1px solid {p.BORDER};border-radius:18px;padding:28px 20px;text-align:center;transition:transform .28s cubic-bezier(.34,1.56,.64,1),box-shadow .28s,border-color .28s;box-shadow:0 4px 24px {p.SHADOW};height:100%;position:relative;overflow:hidden;}}
+.land-card::before{{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,{GOLD}60,transparent);opacity:0;transition:opacity .25s;}}
+.land-card:hover{{transform:translateY(-6px) scale(1.01);box-shadow:0 20px 48px {p.SHADOW};border-color:{GOLD}40;}}
+.land-card:hover::before{{opacity:1;}}
+.land-icon{{font-size:2.4rem;margin-bottom:12px;display:block;}}
+.land-title{{font-size:.98rem;font-weight:800;color:{p.TEXT};margin-bottom:7px;font-family:'Epilogue',sans-serif;}}
+.land-desc{{font-size:.78rem;color:{p.MUTED};line-height:1.65;}}
+
+/* diff table colours */
+.diff-new{{color:{EMERALD};font-weight:700;}}
+.diff-exit{{color:{RUBY};font-weight:700;}}
+.diff-up{{color:{TEAL};}}
+.diff-dn{{color:{AMBER};}}
+
+.rich-divider{{height:1px;background:linear-gradient(90deg,transparent,{GOLD}30,{AMBER}20,transparent);border:none;margin:28px 0;}}
+.pos{{color:{EMERALD}!important;font-weight:600;}}
+.neg{{color:{RUBY}!important;font-weight:600;}}
+*::-webkit-scrollbar{{width:5px;height:5px;}}
+*::-webkit-scrollbar-track{{background:{p.BG};}}
+*::-webkit-scrollbar-thumb{{background:{p.BORDER2};border-radius:3px;}}
+*::-webkit-scrollbar-thumb:hover{{background:{GOLD};}}
+::selection{{background:{GOLD}30;color:{p.TEXT};}}
+</style>""", unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# HELPER COMPONENTS
+# HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
-_ICONS = {"":"📊","b":"💼","g":"📈","r":"📉","y":"💰","t":"🌊","pk":"🌸","vi":"🔮"}
-
+_ICONS = {"":"📊","b":"💼","g":"📈","r":"📉","y":"💰","t":"🌊","pk":"🌸","vi":"🔮","re":"🔥"}
 
 def kpi(label, value, sub="", cls="", delta=None, icon=None):
-    delta_html = ""
+    d_html = ""
     if delta is not None:
-        dc  = "pos" if delta >= 0 else "neg"
-        arr = "▲" if delta >= 0 else "▼"
-        delta_html = f"<div class='kpi-delta {dc}'>{arr} {abs(delta):.2f}%</div>"
-    sub_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
+        dc = "pos" if delta >= 0 else "neg"
+        d_html = f"<div class='kpi-delta {dc}'>{'▲' if delta>=0 else '▼'} {abs(delta):.2f}%</div>"
+    s_html = f"<div class='kpi-sub'>{sub}</div>" if sub else ""
     ico = icon or _ICONS.get(cls, "📊")
-    return (
-        f"<div class='kpi {cls}'>"
-        f"<div class='kpi-glow'></div>"
-        f"<span class='kpi-icon'>{ico}</span>"
-        f"<div class='kpi-lbl'>{label}</div>"
-        f"<div class='kpi-val'>{value}</div>"
-        f"{sub_html}{delta_html}</div>"
-    )
-
+    return (f"<div class='kpi {cls}'><div class='kpi-glow'></div>"
+            f"<span class='kpi-icon'>{ico}</span>"
+            f"<div class='kpi-lbl'>{label}</div><div class='kpi-val'>{value}</div>"
+            f"{s_html}{d_html}</div>")
 
 def insight(icon, label, value, cls=""):
-    return (
-        f"<div class='ibox'><div class='ibox-icon'>{icon}</div>"
-        f"<div class='ibox-lbl'>{label}</div>"
-        f"<div class='ibox-val {cls}'>{value}</div></div>"
-    )
-
+    return (f"<div class='ibox'><div class='ibox-icon'>{icon}</div>"
+            f"<div class='ibox-lbl'>{label}</div>"
+            f"<div class='ibox-val {cls}'>{value}</div></div>")
 
 def mover_card(ticker, price, chg, chga, is_top=False):
-    cls     = "pos" if chg >= 0 else "neg"
-    arr     = "▲" if chg >= 0 else "▼"
-    sec     = get_sector(ticker)
-    top_cls = " top-mover" if is_top else ""
-    return (
-        f"<div class='mover{top_cls}'>"
-        f"<div class='mover-tick'>{ticker}</div>"
-        f"<div style='font-size:.6rem;margin:-4px 0 6px;'><span class='sec-badge'>{sec}</span></div>"
-        f"<div class='mover-price'>GHS {price:.4f}</div>"
-        f"<div class='mover-chg {cls}'>{arr} {abs(chg):.2f}%</div>"
-        f"<div style='font-size:.7rem;color:#424870;margin-top:5px;font-family:DM Mono,monospace;'>"
-        f"Δ {chga:+.4f}</div></div>"
-    )
-
+    cls = "pos" if chg >= 0 else "neg"
+    arr = "▲" if chg >= 0 else "▼"
+    top = " top-mover" if is_top else ""
+    return (f"<div class='mover{top}'>"
+            f"<div class='mover-tick'>{ticker}</div>"
+            f"<div style='font-size:.6rem;margin:-4px 0 6px;'>"
+            f"<span class='sec-badge'>{get_sector(ticker)}</span></div>"
+            f"<div class='mover-price'>GHS {price:.4f}</div>"
+            f"<div class='mover-chg {cls}'>{arr} {abs(chg):.2f}%</div>"
+            f"<div style='font-size:.7rem;color:#424870;margin-top:5px;font-family:DM Mono,monospace;'>"
+            f"Δ {chga:+.4f}</div></div>")
 
 def shdr(text, sub=None):
     p = th()
-    sub_part = (f"<span style='font-size:.76rem;font-weight:400;opacity:.5;margin-left:8px;"
-                f"font-family:Epilogue,sans-serif;'>{sub}</span>") if sub else ""
-    st.markdown(f"<div class='shdr'>{text}{sub_part}</div>", unsafe_allow_html=True)
-
+    s = (f"<span style='font-size:.76rem;font-weight:400;opacity:.5;margin-left:8px;"
+         f"font-family:Epilogue,sans-serif;'>{sub}</span>") if sub else ""
+    st.markdown(f"<div class='shdr'>{text}{s}</div>", unsafe_allow_html=True)
 
 def alert_box(title, body, cls="info"):
-    icons = {"warn":"⚠️","danger":"🚨","ok":"✅","info":"ℹ️"}
-    return (
-        f"<div class='abox {cls}'>"
-        f"<div class='abox-title'>{icons.get(cls,'')} {title}</div>"
-        f"{body}</div>"
-    )
+    icons = {"warn":"⚠️","danger":"🚨","ok":"✅","info":"ℹ️","gold":"✦"}
+    return (f"<div class='abox {cls}'>"
+            f"<div class='abox-title'>{icons.get(cls,'')} {title}</div>"
+            f"{body}</div>")
 
-
-def pn(v):
-    return "pos" if v >= 0 else "neg"
-
-
-def _normalize(s):
-    return re.sub(r"[^A-Z0-9]", "", s.upper())
-
-
+def pn(v): return "pos" if v >= 0 else "neg"
+def _normalize(s): return re.sub(r"[^A-Z0-9]", "", s.upper())
 def _to_float(val):
     try:
         f = float(re.sub(r"[^\d.\-]", "", str(val).replace(",", "")))
         return f if f == f else None
-    except Exception:
-        return None
-
+    except: return None
 
 def tx_type(desc):
     if re.search(r"\bBought\b", desc, re.I): return "Buy"
@@ -343,96 +341,83 @@ def tx_type(desc):
 # LIVE PRICES
 # ─────────────────────────────────────────────────────────────────────────────
 def _parse_gse_api(data, tickers):
-    norm_to_orig = {_normalize(t): t for t in tickers}
-    wanted, results = set(norm_to_orig), {}
+    n2o = {_normalize(t): t for t in tickers}
+    wanted, out = set(n2o), {}
     for item in data:
         sym = _normalize(item.get("name", ""))
-        if sym not in wanted:
-            continue
+        if sym not in wanted: continue
         price = _to_float(item.get("price"))
-        if not price or price <= 0:
-            continue
+        if not price or price <= 0: continue
         chg  = _to_float(item.get("change", 0))
         prev = price - chg if chg else price
-        results[norm_to_orig[sym]] = {
-            "price": price,
-            "change_abs": chg,
-            "change_pct": round((chg / prev * 100) if prev else 0.0, 2),
-        }
-    return results
-
+        out[n2o[sym]] = {"price": price, "change_abs": chg,
+                         "change_pct": round((chg/prev*100) if prev else 0.0, 2)}
+    return out
 
 def _parse_afx_html(html, tickers):
     from bs4 import BeautifulSoup
-    norm_to_orig = {_normalize(t): t for t in tickers}
-    wanted, results = set(norm_to_orig), {}
+    n2o = {_normalize(t): t for t in tickers}
+    wanted, out = set(n2o), {}
     soup  = BeautifulSoup(html, "html.parser")
     table = None
     div   = soup.find("div", class_="t")
-    if div:
-        table = div.find("table")
+    if div: table = div.find("table")
     if not table:
         for tbl in soup.find_all("table"):
-            hdrs = [th_tag.get_text(strip=True) for th_tag in tbl.find_all("th")]
-            if "Ticker" in hdrs and "Price" in hdrs:
-                table = tbl
-                break
-    if not table:
-        return {}
-    headers    = [th_tag.get_text(strip=True) for th_tag in table.find_all("th")]
-    ticker_idx = headers.index("Ticker")
-    price_idx  = headers.index("Price")
-    change_idx = headers.index("Change") if "Change" in headers else None
+            hdrs = [h.get_text(strip=True) for h in tbl.find_all("th")]
+            if "Ticker" in hdrs and "Price" in hdrs: table = tbl; break
+    if not table: return {}
+    headers    = [h.get_text(strip=True) for h in table.find_all("th")]
+    ti = headers.index("Ticker"); pi = headers.index("Price")
+    ci = headers.index("Change") if "Change" in headers else None
     for tr in table.find("tbody").find_all("tr"):
         cells = tr.find_all("td")
-        if len(cells) <= price_idx:
-            continue
-        sym   = _normalize(cells[ticker_idx].get_text(strip=True))
-        if sym not in wanted:
-            continue
-        price = _to_float(cells[price_idx].get_text(strip=True))
-        if not price or price <= 0:
-            continue
-        chg  = (_to_float(cells[change_idx].get_text(strip=True)) or 0.0
-                if change_idx and len(cells) > change_idx else 0.0)
+        if len(cells) <= pi: continue
+        sym   = _normalize(cells[ti].get_text(strip=True))
+        if sym not in wanted: continue
+        price = _to_float(cells[pi].get_text(strip=True))
+        if not price or price <= 0: continue
+        chg  = (_to_float(cells[ci].get_text(strip=True)) or 0.0
+                if ci and len(cells) > ci else 0.0)
         prev = price - chg
-        results[norm_to_orig[sym]] = {
-            "price": price,
-            "change_abs": chg,
-            "change_pct": round((chg / prev * 100) if prev else 0.0, 2),
-        }
-    return results
-
+        out[n2o[sym]] = {"price": price, "change_abs": chg,
+                         "change_pct": round((chg/prev*100) if prev else 0.0, 2)}
+    return out
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _fetch_live(tickers):
     try:
         r = requests.get("https://dev.kwayisi.org/apis/gse/live",
                          headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
-        if r.status_code == 200:
-            return _parse_gse_api(r.json(), tickers)
-    except Exception:
-        pass
+        if r.status_code == 200: return _parse_gse_api(r.json(), tickers)
+    except: pass
     try:
         r = requests.get("https://afx.kwayisi.org/gse/",
                          headers={"User-Agent":"Mozilla/5.0"}, timeout=10, verify=False)
-        if r.status_code == 200:
-            return _parse_afx_html(r.text, tickers)
-    except Exception:
-        pass
+        if r.status_code == 200: return _parse_afx_html(r.text, tickers)
+    except: pass
     return {}
-
 
 def get_live_prices(tickers):
     try:
         html = base64.b64decode(st.secrets["gse_html_b64"]).decode("utf-8")
         return _parse_afx_html(html, tickers)
-    except Exception:
-        pass
-    html = st.session_state.get("gse_html", "")
-    if html:
-        return _parse_afx_html(html, tickers)
+    except: pass
     return _fetch_live(tickers)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_gse_index():
+    """Fetch GSE Composite Index latest value from kwayisi."""
+    try:
+        r = requests.get("https://dev.kwayisi.org/apis/gse/live",
+                         headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            for item in data:
+                if "GSE" in str(item.get("name","")).upper() or "INDEX" in str(item.get("name","")).upper():
+                    return _to_float(item.get("price")), str(item.get("name",""))
+    except: pass
+    return None, None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -450,85 +435,52 @@ def parse_pdf(pdf_bytes):
                 m = re.match(r"(Funds|Fixed Income|Equities|Cash)\s+([\d,\.]+)\s+([\d\.]+)", l.strip())
                 if m:
                     portfolio_summary[m.group(1)] = {
-                        "value": float(m.group(2).replace(",", "")),
-                        "alloc": float(m.group(3)),
-                    }
+                        "value": float(m.group(2).replace(",","")), "alloc": float(m.group(3))}
                 m2 = re.match(r"([\d,\.]+)\s+100\.00", l.strip())
-                if m2:
-                    portfolio_summary["Total"] = float(m2.group(1).replace(",", ""))
+                if m2: portfolio_summary["Total"] = float(m2.group(1).replace(",",""))
 
-    m = re.search(
-        r"IC Liquidity\s+([\d,\.]+)\s+-([\d,\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)",
-        full_text)
+    m = re.search(r"IC Liquidity\s+([\d,\.]+)\s+-([\d,\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)", full_text)
     if m:
-        funds_data = {
-            "name": "IC Liquidity",
-            "invested": float(m.group(1).replace(",", "")),
-            "redeemed": float(m.group(2).replace(",", "")),
-            "market_value": float(m.group(5)),
-        }
+        funds_data = {"name":"IC Liquidity","invested":float(m.group(1).replace(",","")),
+                      "redeemed":float(m.group(2).replace(",","")),"market_value":float(m.group(5))}
 
-    equity_pat = re.compile(
-        r"^([A-Z]{2,8})\s+(GH[A-Z0-9]+|TG[A-Z0-9]+)\s+([\d,\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d,\.]+)")
+    eq_pat = re.compile(r"^([A-Z]{2,8})\s+(GH[A-Z0-9]+|TG[A-Z0-9]+)\s+([\d,\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d,\.]+)")
     for line in lines:
-        m = equity_pat.match(line.strip())
+        m = eq_pat.match(line.strip())
         if m:
-            qty  = float(m.group(3).replace(",", ""))
-            cost = float(m.group(4))
-            tc   = qty * cost
-            mv   = float(m.group(6).replace(",", ""))
-            gl   = mv - tc
-            equities.append({
-                "ticker": m.group(1),
-                "qty": qty,
-                "avg_cost": cost,
-                "statement_price": float(m.group(5)),
-                "live_price": None,
-                "market_value": mv,
-                "total_cost": tc,
-                "gain_loss": gl,
-                "gain_pct": (gl / tc * 100) if tc else 0,
-                "sector": get_sector(m.group(1)),
-            })
+            qty=float(m.group(3).replace(",","")); cost=float(m.group(4))
+            tc=qty*cost; mv=float(m.group(6).replace(",","")); gl=mv-tc
+            equities.append({"ticker":m.group(1),"qty":qty,"avg_cost":cost,
+                             "statement_price":float(m.group(5)),"live_price":None,
+                             "market_value":mv,"total_cost":tc,"gain_loss":gl,
+                             "gain_pct":(gl/tc*100) if tc else 0,"sector":get_sector(m.group(1))})
 
     for line in lines:
         line = line.strip()
-        dm   = re.match(r"^(\d{2}/\d{2}/\d{4})\s+(.*)", line)
-        if not dm:
-            continue
+        dm = re.match(r"^(\d{2}/\d{2}/\d{4})\s+(.*)", line)
+        if not dm: continue
         date_str, rest = dm.group(1), dm.group(2).strip()
         nums = re.findall(r"-?[\d,]+\.\d{2}", rest)
         if len(nums) >= 2:
             try:
-                credit = float(nums[-2].replace(",", ""))
-                debit  = float(nums[-1].replace(",", ""))
-                desc   = rest[: rest.rfind(nums[-2])].strip()
-                ttype  = tx_type(desc)
-                transactions.append({
-                    "date": datetime.strptime(date_str, "%d/%m/%Y"),
-                    "date_str": date_str,
-                    "description": desc,
-                    "credit": credit if credit > 0 else 0,
-                    "debit":  abs(debit) if debit < 0 else 0,
-                    "type":   ttype,
-                })
-            except Exception:
-                pass
+                credit=float(nums[-2].replace(",","")); debit=float(nums[-1].replace(",",""))
+                desc=rest[:rest.rfind(nums[-2])].strip(); ttype=tx_type(desc)
+                transactions.append({"date":datetime.strptime(date_str,"%d/%m/%Y"),
+                    "date_str":date_str,"description":desc,
+                    "credit":credit if credit>0 else 0,
+                    "debit":abs(debit) if debit<0 else 0,"type":ttype})
+            except: pass
 
     def _field(label):
-        m = re.search(re.escape(label) + r"\s*(.+)", full_text)
-        if not m:
-            return ""
+        m = re.search(re.escape(label)+r"\s*(.+)", full_text)
+        if not m: return ""
         v = m.group(1).strip().split("\n")[0].strip()
         return re.split(r"\s{3,}|\s+(?:Report Date|Account Number|Address|Report Currency):", v)[0].strip()
 
-    return {
-        "equities": equities, "transactions": transactions,
-        "portfolio_summary": portfolio_summary, "funds": funds_data,
-        "client_name":    _field("Client Name:"),
-        "account_number": _field("Account Number:"),
-        "report_date":    _field("Report Date:"),
-    }
+    return {"equities":equities,"transactions":transactions,
+            "portfolio_summary":portfolio_summary,"funds":funds_data,
+            "client_name":_field("Client Name:"),"account_number":_field("Account Number:"),
+            "report_date":_field("Report Date:")}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -539,17 +491,13 @@ def inject_live_prices(equities, live):
     for e in equities:
         e = e.copy()
         if e["ticker"] in live:
-            lp = live[e["ticker"]]["price"]
-            mv = e["qty"] * lp
-            gl = mv - e["total_cost"]
-            e.update({
-                "live_price": lp, "market_value": mv, "gain_loss": gl,
-                "gain_pct": (gl / e["total_cost"] * 100) if e["total_cost"] else 0,
-                "change_pct": live[e["ticker"]]["change_pct"],
-                "change_abs": live[e["ticker"]]["change_abs"],
-            })
+            lp=live[e["ticker"]]["price"]; mv=e["qty"]*lp; gl=mv-e["total_cost"]
+            e.update({"live_price":lp,"market_value":mv,"gain_loss":gl,
+                      "gain_pct":(gl/e["total_cost"]*100) if e["total_cost"] else 0,
+                      "change_pct":live[e["ticker"]]["change_pct"],
+                      "change_abs":live[e["ticker"]]["change_abs"]})
         else:
-            e["live_price"] = e["change_pct"] = e["change_abs"] = None
+            e["live_price"]=e["change_pct"]=e["change_abs"]=None
         out.append(e)
     return out
 
@@ -558,630 +506,367 @@ def inject_live_prices(equities, live):
 # METRICS
 # ─────────────────────────────────────────────────────────────────────────────
 def compute_metrics(eq, txs, ps):
-    equities_val = sum(e["market_value"] for e in eq)
-    total_cost   = sum(e["total_cost"]   for e in eq)
-    total_gain   = sum(e["gain_loss"]    for e in eq)
-    gain_pct     = (total_gain / total_cost * 100) if total_cost else 0
-    cash_val     = ps.get("Cash",  {}).get("value", 0)
-    funds_val    = ps.get("Funds", {}).get("value", 0)
-    total_value  = equities_val + cash_val + funds_val
-
-    net_contributions = sum(t["credit"] for t in txs if t["type"] == "Credit")
-    net_withdrawals   = sum(t["debit"]  for t in txs if t["type"] == "Withdrawal")
-    net_invested      = net_contributions - net_withdrawals
-    total_credits_all = sum(t["credit"] for t in txs)
-    total_debits_all  = sum(t["debit"]  for t in txs)
-    overall_roi       = ((total_value - net_invested) / net_invested * 100) if net_invested > 0 else 0
-    dividend_income   = sum(t["credit"] for t in txs if t["type"] == "Dividend")
-
-    cagr = None
-    funding_txs = [t for t in txs if t["type"] == "Credit"]
-    if funding_txs and net_invested > 0 and total_value > 0:
-        first_date = min(t["date"] for t in funding_txs)
-        years = (datetime.now() - first_date).days / 365.25
-        if years >= 0.1:
-            cagr = ((total_value / net_invested) ** (1.0 / years) - 1) * 100
-
-    weights = [e["market_value"] / equities_val for e in eq] if equities_val else []
-    hhi     = round(sum(w**2 for w in weights) * 10000) if weights else 0
-
-    sectors_used = len(set(e["sector"] for e in eq))
-    winners      = sum(1 for e in eq if e["gain_pct"] >= 0)
-    n            = len(eq)
-    div_score    = (len([e for e in eq if e["market_value"]/equities_val > 0.05]) / n * 100) if n and equities_val else 0
-    win_score    = (winners / n * 100) if n else 0
-    roi_score    = min(100, max(0, overall_roi + 30))
-    conc_score   = max(0, 100 - hhi / 100)
-    sec_score    = min(100, sectors_used / max(1, n) * 100 * 3)
-    health_score = round(0.30*roi_score + 0.20*win_score + 0.15*div_score + 0.20*conc_score + 0.15*sec_score)
-    health_score = max(0, min(100, health_score))
-
-    active_month = "N/A"
+    ev=sum(e["market_value"] for e in eq); tc=sum(e["total_cost"] for e in eq)
+    tg=sum(e["gain_loss"] for e in eq); gp=(tg/tc*100) if tc else 0
+    cv=ps.get("Cash",{}).get("value",0); fv=ps.get("Funds",{}).get("value",0)
+    tv=ev+cv+fv
+    nc=sum(t["credit"] for t in txs if t["type"]=="Credit")
+    nw=sum(t["debit"]  for t in txs if t["type"]=="Withdrawal")
+    ni=nc-nw
+    roi=((tv-ni)/ni*100) if ni>0 else 0
+    div=sum(t["credit"] for t in txs if t["type"]=="Dividend")
+    cagr=None; funding_txs=[t for t in txs if t["type"]=="Credit"]
+    years=0.0
+    if funding_txs and ni>0 and tv>0:
+        first=min(t["date"] for t in funding_txs)
+        years=(datetime.now()-first).days/365.25
+        if years>=0.1: cagr=((tv/ni)**(1.0/years)-1)*100
+    weights=[e["market_value"]/ev for e in eq] if ev else []
+    hhi=round(sum(w**2 for w in weights)*10000) if weights else 0
+    su=len(set(e["sector"] for e in eq)); winners=sum(1 for e in eq if e["gain_pct"]>=0)
+    n=len(eq)
+    hs=max(0,min(100,round(
+        0.30*min(100,max(0,roi+30))+
+        0.20*(winners/n*100 if n else 0)+
+        0.15*(len([e for e in eq if ev and e["market_value"]/ev>0.05])/n*100 if n and ev else 0)+
+        0.20*max(0,100-hhi/100)+
+        0.15*min(100,su/max(1,n)*100*3))))
+    active_month="N/A"
     if txs:
-        _tdf = pd.DataFrame(txs)
-        _tdf["month"] = _tdf["date"].dt.to_period("M")
-        active_month  = str(_tdf["month"].value_counts().idxmax())
+        _tdf=pd.DataFrame(txs); _tdf["month"]=_tdf["date"].dt.to_period("M")
+        active_month=str(_tdf["month"].value_counts().idxmax())
+    best=max(eq,key=lambda e:e["gain_pct"]); worst=min(eq,key=lambda e:e["gain_pct"])
+    biggest=max(eq,key=lambda e:e["market_value"])
+    return dict(ev=ev,tc=tc,tg=tg,gp=gp,cv=cv,fv=fv,tv=tv,ni=ni,nc=nc,nw=nw,
+                roi=roi,cagr=cagr,div=div,hhi=hhi,hs=hs,winners=winners,
+                active_month=active_month,best=best,worst=worst,biggest=biggest,
+                su=su,years=years)
 
-    best    = max(eq, key=lambda e: e["gain_pct"])
-    worst   = min(eq, key=lambda e: e["gain_pct"])
-    biggest = max(eq, key=lambda e: e["market_value"])
-
-    return dict(
-        equities_val=equities_val, total_cost=total_cost, total_gain=total_gain,
-        gain_pct=gain_pct, cash_val=cash_val, funds_val=funds_val,
-        total_value=total_value, net_invested=net_invested,
-        net_contributions=net_contributions, net_withdrawals=net_withdrawals,
-        total_credits_all=total_credits_all, total_debits_all=total_debits_all,
-        overall_roi=overall_roi, cagr=cagr, dividend_income=dividend_income,
-        hhi=hhi, health_score=health_score, winners=winners,
-        active_month=active_month, best=best, worst=worst, biggest=biggest,
-        sectors_used=sectors_used,
-    )
-
-
-def compute_advanced_metrics(eq, txs, m):
-    RF_RATE = 18.0  # Ghana 91-day T-bill approx
-
-    if eq and m["equities_val"]:
-        returns = [e["gain_pct"] for e in eq]
-        weights = [e["market_value"] / m["equities_val"] for e in eq]
-        w_mean  = sum(r*w for r, w in zip(returns, weights))
-        var     = sum(w*(r - w_mean)**2 for r, w in zip(returns, weights))
-        port_vol = var**0.5
-    else:
-        port_vol = 0.0
-
-    cagr_v = m.get("cagr") or 0.0
-    sharpe = (cagr_v - RF_RATE) / port_vol if port_vol > 1e-6 else None
-
-    max_dd = 0.0
+def compute_advanced(eq, txs, m):
+    RF=18.0
+    if eq and m["ev"]:
+        rets=[e["gain_pct"] for e in eq]; ws=[e["market_value"]/m["ev"] for e in eq]
+        wm=sum(r*w for r,w in zip(rets,ws)); var=sum(w*(r-wm)**2 for r,w in zip(rets,ws))
+        vol=var**0.5
+    else: vol=0.0
+    cagr=m.get("cagr") or 0.0
+    sharpe=(cagr-RF)/vol if vol>1e-6 else None
+    max_dd=0.0
     if txs:
-        df = pd.DataFrame(txs).sort_values("date")
-        df["net"]   = df["credit"] - df["debit"]
-        df["cumul"] = df["net"].cumsum()
-        peak = df["cumul"].cummax()
-        with np.errstate(divide="ignore", invalid="ignore"):
-            dd = np.where(peak > 0, (df["cumul"] - peak) / peak * 100, 0.0)
-        max_dd = float(np.min(dd))
-
-    enp         = round(10000 / m["hhi"], 1) if m["hhi"] > 0 else float(len(eq))
-    near_flat   = sum(1 for e in eq if e["gain_pct"] > -5)
-    consistency = near_flat / len(eq) * 100 if eq else 0
-
-    div_yield_cost   = m["dividend_income"] / m["total_cost"]   * 100 if m["total_cost"]   else 0
-    div_yield_market = m["dividend_income"] / m["equities_val"] * 100 if m["equities_val"] else 0
-
-    holding_periods = {}
-    buy_txs = [t for t in txs if t["type"] == "Buy"]
+        df=pd.DataFrame(txs).sort_values("date")
+        df["net"]=df["credit"]-df["debit"]; df["cumul"]=df["net"].cumsum()
+        peak=df["cumul"].cummax()
+        with np.errstate(divide="ignore",invalid="ignore"):
+            dd=np.where(peak>0,(df["cumul"]-peak)/peak*100,0.0)
+        max_dd=float(np.min(dd))
+    enp=round(10000/m["hhi"],1) if m["hhi"]>0 else float(len(eq))
+    consistency=sum(1 for e in eq if e["gain_pct"]>-5)/len(eq)*100 if eq else 0
+    dyc=m["div"]/m["tc"]*100 if m["tc"] else 0
+    dym=m["div"]/m["ev"]*100 if m["ev"] else 0
+    holding_periods={}
+    buy_txs=[t for t in txs if t["type"]=="Buy"]
     for e in eq:
-        matches = [t for t in buy_txs if e["ticker"] in t["description"].upper()]
+        matches=[t for t in buy_txs if e["ticker"] in t["description"].upper()]
         if matches:
-            first_buy = min(t["date"] for t in matches)
-            holding_periods[e["ticker"]] = (datetime.now() - first_buy).days
-    avg_holding = int(np.mean(list(holding_periods.values()))) if holding_periods else None
-
-    return dict(
-        sharpe=sharpe, max_dd=max_dd, enp=enp, port_vol=port_vol,
-        consistency=consistency, div_yield_cost=div_yield_cost,
-        div_yield_market=div_yield_market, rf_rate=RF_RATE,
-        holding_periods=holding_periods, avg_holding=avg_holding,
-    )
+            holding_periods[e["ticker"]]=(datetime.now()-min(t["date"] for t in matches)).days
+    avg_holding=int(np.mean(list(holding_periods.values()))) if holding_periods else None
+    return dict(sharpe=sharpe,max_dd=max_dd,enp=enp,vol=vol,consistency=consistency,
+                dyc=dyc,dym=dym,rf=RF,holding_periods=holding_periods,avg_holding=avg_holding)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CHARTS
+# FEE ANALYSIS
 # ─────────────────────────────────────────────────────────────────────────────
-def chart_gain_loss(eq):
-    p  = th()
-    df = pd.DataFrame(eq).sort_values("gain_pct")
-    clr = [EMERALD if v >= 0 else RUBY for v in df["gain_pct"]]
-    fig = go.Figure(go.Bar(
-        x=df["gain_pct"], y=df["ticker"], orientation="h",
-        marker=dict(color=clr, opacity=0.85, line=dict(width=0)),
-        text=[f"{v:+.1f}%" for v in df["gain_pct"]], textposition="outside",
-        textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
-        hovertemplate="<b>%{y}</b><br>Return: %{x:.2f}%<extra></extra>",
-    ))
-    fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(**T(title="Return per Stock (%)", xt="Return (%)"), height=380)
-    return fig
+def compute_fees(txs):
+    """Estimate total brokerage / levy fees paid on all buy and sell transactions."""
+    rows = []
+    total_fees = 0.0
+    for t in txs:
+        if t["type"] not in ("Buy","Sell"): continue
+        vol = t["credit"] + t["debit"]
+        fee_breakdown = {k: vol*v for k,v in IC_FEES.items()}
+        total = sum(fee_breakdown.values())
+        total_fees += total
+        rows.append({"date": t["date"], "type": t["type"],
+                     "volume": vol, "est_fees": total, **fee_breakdown})
+    return rows, total_fees
 
 
-def chart_performance_attribution(eq, equities_val):
-    p  = th()
-    df = pd.DataFrame(eq).copy()
-    df["contribution_pct"] = (df["gain_loss"] / equities_val * 100) if equities_val else 0
-    df = df.sort_values("contribution_pct")
-    clr = [EMERALD if v >= 0 else RUBY for v in df["contribution_pct"]]
-    fig = go.Figure(go.Bar(
-        x=df["contribution_pct"], y=df["ticker"], orientation="h",
-        marker=dict(color=clr, opacity=0.85, line=dict(width=0)),
-        text=[f"{v:+.2f}%" for v in df["contribution_pct"]], textposition="outside",
-        textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
-        customdata=df["gain_loss"],
-        hovertemplate="<b>%{y}</b><br>Contribution: %{x:+.2f}%<br>P&L: GHS %{customdata:,.2f}<extra></extra>",
-    ))
-    fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(
-        **T(title="Performance Attribution — % contribution of each stock to portfolio P&L", xt="Contribution (% of equity value)"), height=380)
-    return fig
-
-
-def chart_sector_donut(eq):
-    p      = th()
-    df     = pd.DataFrame(eq)
-    sec_df = df.groupby("sector")["market_value"].sum().reset_index().sort_values("market_value", ascending=False)
-    total  = sec_df["market_value"].sum()
-    sec_df["pct"] = sec_df["market_value"] / total * 100
-    clr = [SECTOR_COLORS.get(s, p.MUTED) for s in sec_df["sector"]]
-    fig = go.Figure(go.Pie(
-        labels=sec_df["sector"], values=sec_df["market_value"], hole=0.62,
-        marker=dict(colors=clr, line=dict(color=p.BG, width=3)),
-        texttemplate="<b>%{label}</b><br>%{percent:.1%}",
-        textfont=dict(size=11, family="Epilogue"),
-        hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f}<br>%{percent:.1%}<extra></extra>",
-        sort=False,
-    ))
-    fig.update_layout(
-        annotations=[dict(text=f"<b>{len(sec_df)}</b><br><span style='font-size:9px'>Sectors</span>",
-                          x=0.5, y=0.5, font=dict(size=18, color=p.TEXT, family="DM Mono"),
-                          showarrow=False)],
-        **T(title="Sector Allocation"), height=340)
-    return fig
-
-
-def chart_sector_performance(eq):
-    p  = th()
-    df = pd.DataFrame(eq)
-    sg = df.groupby("sector").agg(mv=("market_value","sum"), tc=("total_cost","sum"),
-                                   gl=("gain_loss","sum")).reset_index().sort_values("mv", ascending=False)
-    sg["ret"] = sg["gl"] / sg["tc"] * 100
-    fig = make_subplots(rows=1, cols=2,
-                        subplot_titles=["Market Value vs Cost by Sector", "Sector Return (%)"],
-                        column_widths=[0.6, 0.4])
-    fig.add_trace(go.Bar(name="Cost Basis", x=sg["sector"], y=sg["tc"],
-                         marker_color=AZURE, opacity=0.65), row=1, col=1)
-    fig.add_trace(go.Bar(name="Market Value", x=sg["sector"], y=sg["mv"],
-                         marker_color=GOLD, opacity=0.9), row=1, col=1)
-    bar_clr = [EMERALD if v >= 0 else RUBY for v in sg["ret"]]
-    fig.add_trace(go.Bar(name="Return %", x=sg["sector"], y=sg["ret"],
-                         marker=dict(color=bar_clr, opacity=0.85),
-                         text=[f"{v:+.1f}%" for v in sg["ret"]], textposition="outside",
-                         textfont=dict(size=10, family="DM Mono", color=p.TEXT2),
-                         showlegend=False), row=1, col=2)
-    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", row=1, col=2)
-    layout = {**T(), "barmode":"group", "height":360,
-              "xaxis": dict(tickangle=-20, gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-              "xaxis2":dict(tickangle=-20, gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-              "yaxis": dict(title=dict(text="GHS"), gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-              "yaxis2":dict(title=dict(text="Return (%)"), gridcolor=p.BORDER, tickfont=dict(color=p.MUTED))}
-    fig.update_layout(**layout)
-    return fig
-
-
-def chart_portfolio_efficiency(eq):
-    p  = th()
-    df = pd.DataFrame(eq).copy()
-    df["efficiency"] = df["gain_loss"] / df["total_cost"].replace(0, 1) * 100
-    df = df.sort_values("efficiency")
-    clr = [EMERALD if v >= 0 else RUBY for v in df["efficiency"]]
-    fig = go.Figure(go.Bar(
-        x=df["efficiency"], y=df["ticker"], orientation="h",
-        marker=dict(color=clr, opacity=0.85, line=dict(width=0)),
-        text=[f"{v:+.1f}%" for v in df["efficiency"]], textposition="outside",
-        textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
-        customdata=df["gain_loss"],
-        hovertemplate="<b>%{y}</b><br>Efficiency: %{x:+.1f}%<br>P&L: GHS %{customdata:,.2f}<extra></extra>",
-    ))
-    fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(**T(title="Portfolio Efficiency — Gain / GHS Invested (%)", xt="ROI (%)"), height=360)
-    return fig
-
-
-def chart_risk_return_scatter(eq, equities_val):
-    p       = th()
-    df      = pd.DataFrame(eq).copy()
-    df["weight"] = df["market_value"] / equities_val * 100 if equities_val else 0
-    equal_w = 100 / len(eq) if eq else 10
-    fig = go.Figure()
-    for sector in df["sector"].unique():
-        sub = df[df["sector"] == sector]
-        fig.add_trace(go.Scatter(
-            x=sub["weight"], y=sub["gain_pct"],
-            mode="markers+text", name=sector,
-            marker=dict(
-                size  = sub["market_value"] / sub["market_value"].max() * 40 + 12,
-                color = SECTOR_COLORS.get(sector, p.MUTED),
-                opacity=0.82,
-                line  = dict(color=p.BG, width=2),
-            ),
-            text=sub["ticker"],
-            textposition="top center",
-            textfont=dict(size=9, color=p.TEXT2, family="Epilogue"),
-            customdata=sub[["market_value","gain_loss","sector"]].values,
-            hovertemplate=(
-                "<b>%{text}</b><br>Sector: %{customdata[2]}<br>"
-                "Weight: %{x:.1f}%<br>Return: %{y:+.1f}%<br>"
-                "Market Value: GHS %{customdata[0]:,.2f}<br>"
-                "P&L: GHS %{customdata[1]:+,.2f}<extra></extra>"
-            ),
-        ))
-    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.add_vline(x=equal_w, line_color=GOLD, line_dash="dot", line_width=1,
-                  annotation_text=f" Equal weight ({equal_w:.1f}%)",
-                  annotation_font=dict(color=GOLD, size=9, family="DM Mono"))
-    for txt, ax, ay in [("High weight / High return", 0.92, 0.95),
-                         ("Low weight / High return",  0.05, 0.95),
-                         ("High weight / Low return",  0.92, 0.05),
-                         ("Low weight / Low return",   0.05, 0.05)]:
-        fig.add_annotation(xref="paper", yref="paper", x=ax, y=ay, text=txt,
-                           showarrow=False, font=dict(size=8, color=p.MUTED, family="Epilogue"),
-                           align="center", opacity=0.6)
-    fig.update_layout(
-        **T(title="Risk / Return Matrix — Bubble size = Market Value", xt="Portfolio Weight (%)", yt="Return (%)"), height=440)
-    return fig
-
-
-def chart_pl_waterfall(eq):
-    p     = th()
-    df    = pd.DataFrame(eq).sort_values("gain_loss")
-    total = df["gain_loss"].sum()
-    tickers = df["ticker"].tolist() + ["TOTAL"]
-    vals    = df["gain_loss"].tolist() + [total]
-    clr     = [EMERALD if v >= 0 else RUBY for v in vals]
-    clr[-1] = GOLD if total >= 0 else RUBY
-    fig = go.Figure(go.Bar(
-        x=tickers, y=vals,
-        marker=dict(color=clr, opacity=[0.8]*len(df)+[1.0], line=dict(width=0)),
-        text=[f"{'+'if v>=0 else ''}GHS {v:,.0f}" for v in vals],
-        textposition="outside", textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
-        hovertemplate="<b>%{x}</b><br>P&L: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(**T(title="P&L Contribution per Stock (GHS)", yt="GHS"), height=340)
-    return fig
-
-
-def chart_market_vs_cost(eq):
-    p  = th()
-    df = pd.DataFrame(eq).sort_values("market_value", ascending=False)
-    fig = go.Figure()
-    fig.add_trace(go.Bar(name="Cost Basis", x=df["ticker"], y=df["total_cost"],
-                         marker_color=AZURE, opacity=0.7,
-                         hovertemplate="%{x}: GHS %{y:,.2f}<extra>Cost</extra>"))
-    fig.add_trace(go.Bar(name="Market Value", x=df["ticker"], y=df["market_value"],
-                         marker_color=GOLD, opacity=0.9,
-                         hovertemplate="%{x}: GHS %{y:,.2f}<extra>Market</extra>"))
-    for _, row in df.iterrows():
-        gl = row["gain_pct"]
-        fig.add_annotation(x=row["ticker"],
-                           y=max(row["total_cost"], row["market_value"]),
-                           text=f"{gl:+.1f}%", showarrow=False, yshift=12,
-                           font=dict(color=EMERALD if gl >= 0 else RUBY, size=9, family="DM Mono"))
-    fig.update_layout(**T(title="Market Value vs Cost Basis", yt="GHS"), barmode="group", height=380)
-    return fig
-
-
-def chart_allocation_treemap(ps):
-    p    = th()
-    cmap = {"Equities":VIOLET,"Cash":AZURE,"Funds":GOLD,"Fixed Income":TEAL}
-    labels, parents, values, clr = [], [], [], []
-    for k, v in ps.items():
-        if k == "Total" or v["value"] == 0:
-            continue
-        labels.append(k); parents.append(""); values.append(v["value"])
-        clr.append(cmap.get(k, p.MUTED))
-    fig = go.Figure(go.Treemap(
-        labels=labels, parents=parents, values=values,
-        marker=dict(colors=clr, line=dict(width=3, color=p.BG)),
-        texttemplate="<b>%{label}</b><br>GHS %{value:,.0f}<br>%{percentRoot:.1%}",
-        textfont=dict(size=12, family="Epilogue"),
-        hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f}<br>%{percentRoot:.1%}<extra></extra>",
-    ))
-    fig.update_layout(**{**T(title="Asset Class Allocation"), "margin":dict(l=8,r=8,t=48,b=8)}, height=300)
-    return fig
-
-
-def chart_drawdown(txs, total_value):
-    p  = th()
-    df = pd.DataFrame(txs).sort_values("date")
-    if df.empty:
-        return None
-    df["net"]   = df["credit"] - df["debit"]
-    df["cumul"] = df["net"].cumsum()
-    if df["cumul"].iloc[-1] > 0:
-        df["scaled"] = df["cumul"] * (total_value / df["cumul"].iloc[-1])
-    else:
-        df["scaled"] = df["cumul"]
-    peak = df["scaled"].cummax()
-    with np.errstate(divide="ignore", invalid="ignore"):
-        dd = np.where(peak > 0, (df["scaled"] - peak) / peak * 100, 0.0)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=dd, mode="lines",
-        fill="tozeroy", fillcolor="rgba(255,57,96,0.10)",
-        line=dict(color=RUBY, width=2), name="Drawdown",
-        hovertemplate="%{x|%b %d %Y}<br>Drawdown: %{y:.2f}%<extra></extra>",
-    ))
-    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.update_layout(**T(title="Portfolio Drawdown (%) from Peak", xt="Date", yt="Drawdown (%)"), height=300)
-    return fig
-
-
-def chart_monthly_cashflow_heatmap(txs):
-    p  = th()
-    if not txs:
-        return None
-    df = pd.DataFrame(txs)
-    df["year"]  = df["date"].dt.year
-    df["month"] = df["date"].dt.month
-    df["net"]   = df["credit"] - df["debit"]
-    pivot = df.groupby(["year","month"])["net"].sum().reset_index()
-    pivot = pivot.pivot(index="year", columns="month", values="net").fillna(0)
-    months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-    z_vals, y_vals = [], []
-    for yr in sorted(pivot.index, reverse=True):
-        row = [float(pivot.loc[yr, col]) if col in pivot.columns else 0 for col in range(1, 13)]
-        z_vals.append(row)
-        y_vals.append(str(yr))
-    fig = go.Figure(go.Heatmap(
-        z=z_vals, x=months, y=y_vals,
-        colorscale=[[0, RUBY],[0.5, p.CARD2],[1, EMERALD]],
-        zmid=0,
-        text=[[f"GHS {v:+,.0f}" if v != 0 else "—" for v in row] for row in z_vals],
-        texttemplate="%{text}",
-        textfont=dict(size=9, family="DM Mono"),
-        hovertemplate="<b>%{y} %{x}</b><br>Net Flow: GHS %{z:+,.2f}<extra></extra>",
-        showscale=True,
-        colorbar=dict(tickfont=dict(color=p.TEXT2, size=9, family="DM Mono"),
-                      outlinecolor=p.BORDER, outlinewidth=1,
-                      title=dict(text="GHS", font=dict(color=p.MUTED, size=9))),
-    ))
-    _hm_layout = T(title="Monthly Net Cash Flow Calendar")
-    _hm_layout["margin"] = dict(l=16, r=16, t=80, b=16)
-    _hm_layout["xaxis"] = dict(side="top", gridcolor=p.BORDER, tickcolor=p.MUTED,
-                                tickfont=dict(color=p.TEXT2, family="Epilogue"))
-    _hm_layout["yaxis"] = dict(gridcolor=p.BORDER, tickcolor=p.MUTED,
-                                tickfont=dict(color=p.TEXT2, family="DM Mono"))
-    _hm_layout["height"] = max(200, len(y_vals)*50 + 90)
-    fig.update_layout(**_hm_layout)
-    return fig
-
-
-def chart_cashflow(txs):
-    p  = th()
-    df = pd.DataFrame(txs)
-    if df.empty:
-        return None
-    df["month"] = df["date"].dt.to_period("M")
-    mg = df.groupby("month").agg(credits=("credit","sum"), debits=("debit","sum")).reset_index()
-    mg["month_str"] = mg["month"].astype(str)
-    mg["net"]    = mg["credits"] - mg["debits"]
-    mg["cumnet"] = mg["net"].cumsum()
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.65,0.35],
-                        vertical_spacing=0.06,
-                        subplot_titles=["Monthly Credits & Debits","Cumulative Net Flow"])
-    fig.add_trace(go.Bar(name="Credits", x=mg["month_str"], y=mg["credits"],
-                         marker_color=EMERALD, opacity=0.8), row=1, col=1)
-    fig.add_trace(go.Bar(name="Debits",  x=mg["month_str"], y=mg["debits"],
-                         marker_color=RUBY, opacity=0.8), row=1, col=1)
-    fig.add_trace(go.Scatter(name="Net", x=mg["month_str"], y=mg["net"],
-                             mode="lines+markers", line=dict(color=GOLD, width=2.5),
-                             marker=dict(size=5, color=GOLD)), row=1, col=1)
-    net_clr = [EMERALD if v >= 0 else RUBY for v in mg["cumnet"]]
-    fig.add_trace(go.Bar(name="Cumulative", x=mg["month_str"], y=mg["cumnet"],
-                         marker_color=net_clr, opacity=0.72, showlegend=False), row=2, col=1)
-    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1, row=1, col=1)
-    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1, row=2, col=1)
-    layout = {**T(), "barmode":"group", "height":500,
-              "xaxis2":dict(tickangle=-30, gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-              "yaxis" :dict(title=dict(text="GHS"), gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-              "yaxis2":dict(title=dict(text="GHS"), gridcolor=p.BORDER, tickfont=dict(color=p.MUTED))}
-    fig.update_layout(**layout)
-    return fig
-
-
-def chart_cumulative(txs, total_value):
-    p  = th()
-    df = pd.DataFrame(txs).sort_values("date")
-    if df.empty:
-        return None
-    df["net"]   = df["credit"] - df["debit"]
-    df["cumul"] = df["net"].cumsum()
-    profit = total_value - df["cumul"].iloc[-1]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["cumul"], mode="lines",
-        fill="tozeroy", fillcolor="rgba(232,180,56,0.08)",
-        line=dict(color=GOLD, width=2.5), name="Net Invested",
-        hovertemplate="%{x|%b %d, %Y}<br>Invested: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.add_hline(y=total_value, line_color=EMERALD, line_dash="dash", line_width=2,
-                  annotation_text=f" Portfolio Value GHS {total_value:,.0f}",
-                  annotation_font=dict(color=EMERALD, size=10, family="DM Mono"))
-    fig.update_layout(
-        **T(title=f"Net Invested vs Current Value ({'+'if profit>=0 else ''}GHS {profit:,.0f} unrealised)", xt="Date", yt="GHS"), height=320)
-    return fig
-
-
-def chart_breakeven(eq):
-    p      = th()
-    losers = [e for e in eq if e["gain_pct"] < 0]
-    if not losers:
-        return None
-    df = pd.DataFrame(losers)
-    pc = df["live_price"].fillna(df["statement_price"])
-    pct_need = (df["avg_cost"] - pc) / pc * 100
-    gap_ghs  = (df["avg_cost"] - pc) * df["qty"]
-    fig = make_subplots(rows=1, cols=2,
-                        subplot_titles=["Price Gap to Break-even","GHS Loss to Recover"],
-                        specs=[[{"type":"xy"},{"type":"xy"}]])
-    fig.add_trace(go.Bar(name="Current Price", x=df["ticker"], y=pc,
-                         marker_color=RUBY, opacity=0.8), row=1, col=1)
-    fig.add_trace(go.Bar(name="Break-even",    x=df["ticker"], y=df["avg_cost"],
-                         marker_color=GOLD,    opacity=0.8), row=1, col=1)
-    fig.add_trace(go.Scatter(
-        name="% Rally Needed", x=df["ticker"], y=pct_need, yaxis="y2",
-        mode="markers+text",
-        marker=dict(size=13, color=AMBER, symbol="diamond", line=dict(color=p.BG, width=2)),
-        text=[f"+{v:.1f}%" for v in pct_need], textposition="top center",
-        textfont=dict(color=AMBER, size=9, family="DM Mono"),
-    ), row=1, col=1)
-    fig.add_trace(go.Bar(
-        name="GHS to Recover", x=df["ticker"], y=gap_ghs.abs(),
-        marker=dict(color=gap_ghs.abs(), colorscale=[[0,GOLD],[1,RUBY]], line=dict(width=0)),
-        text=[f"GHS {v:,.0f}" for v in gap_ghs.abs()], textposition="outside",
-        textfont=dict(size=9, family="DM Mono"),
-    ), row=1, col=2)
-    layout = {**T(), "title":"Break-even Analysis — Losing Positions",
-              "barmode":"group", "height":380,
-              "yaxis" :dict(title=dict(text="Price (GHS)"), gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-              "yaxis2":dict(title=dict(text="% Rally Needed"), overlaying="y", side="right",
-                            showgrid=False, color=AMBER, tickfont=dict(color=AMBER, family="DM Mono")),
-              "yaxis3":dict(title=dict(text="GHS to Recover"), gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-              "xaxis2":dict(gridcolor=p.BORDER, tickfont=dict(color=p.MUTED))}
-    fig.update_layout(**layout)
-    return fig
-
-
-def chart_concentration(eq):
-    p   = th()
-    df  = pd.DataFrame(eq)
-    tot = df["market_value"].sum()
-    w   = df["market_value"] / tot
-    hhi = round((w**2).sum() * 10000)
-    if hhi < 1500: risk, rc = "Low",      EMERALD
-    elif hhi < 2500: risk, rc = "Moderate", AMBER
-    else:            risk, rc = "High",     RUBY
-    fig = make_subplots(rows=1, cols=2,
-                        subplot_titles=["HHI Concentration Score","Exposure by Stock"],
-                        specs=[[{"type":"indicator"},{"type":"xy"}]])
-    fig.add_trace(go.Indicator(
-        mode="gauge+number+delta", value=hhi,
-        delta=dict(reference=1500, valueformat=".0f",
-                   increasing=dict(color=RUBY), decreasing=dict(color=EMERALD)),
-        number=dict(font=dict(color=rc, size=34, family="DM Mono"), suffix=" HHI"),
-        gauge=dict(
-            axis=dict(range=[0,10000], tickcolor=p.MUTED,
-                      tickfont=dict(color=p.MUTED, size=8, family="DM Mono")),
-            bar=dict(color=rc, thickness=0.28),
-            bgcolor=p.CARD2, bordercolor=p.BORDER,
-            steps=[dict(range=[0,1500],    color="rgba(0,212,133,0.1)"),
-                   dict(range=[1500,2500], color="rgba(245,158,11,0.1)"),
-                   dict(range=[2500,10000],color="rgba(255,57,96,0.1)")],
-            threshold=dict(line=dict(color=rc, width=3), thickness=0.8, value=hhi),
-        ),
-        title=dict(text=f"<b>{risk}</b> Concentration", font=dict(color=rc, size=13, family="Epilogue")),
-    ), row=1, col=1)
-    df_s    = df.sort_values("market_value", ascending=True)
-    ws      = (df_s["market_value"] / tot * 100).values
-    sec_clr = [SECTOR_COLORS.get(s, p.MUTED) for s in df_s["sector"]]
-    fig.add_trace(go.Bar(
-        x=ws, y=df_s["ticker"].values, orientation="h",
-        marker=dict(color=sec_clr, line=dict(width=0), opacity=0.85),
-        text=[f"{v:.1f}%" for v in ws], textposition="outside",
-        textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
-        customdata=df_s["sector"].values,
-        hovertemplate="<b>%{y}</b>: %{x:.1f}%<br>Sector: %{customdata}<extra></extra>",
-        showlegend=False,
-    ), row=1, col=2)
-    layout = {
-        "paper_bgcolor":p.BG, "plot_bgcolor":p.CARD,
-        "font":dict(color=p.TEXT2, family="DM Mono"),
-        "margin":dict(l=16,r=16,t=60,b=16), "height":380,
-        "xaxis2":dict(gridcolor=p.BORDER, title=dict(text="Weight (%)"),
-                      tickfont=dict(color=p.MUTED)),
-        "yaxis2":dict(gridcolor=p.BORDER, tickfont=dict(color=p.MUTED)),
-        "hoverlabel":dict(bgcolor=p.CARD2, bordercolor=p.BORDER, font=dict(color=p.TEXT)),
-        "legend":dict(bgcolor=p.CARD2, bordercolor=p.BORDER),
-        "title":dict(font=dict(color=p.TEXT, family="Epilogue", size=14), x=0.01),
-    }
-    fig.update_layout(**layout)
-    return fig, hhi, risk, rc
-
-
-def chart_dividend_timeline(txs):
-    p       = th()
+# ─────────────────────────────────────────────────────────────────────────────
+# DRIP SIMULATOR
+# ─────────────────────────────────────────────────────────────────────────────
+def simulate_drip(eq, txs, m):
+    """
+    Estimate portfolio value if every dividend had been reinvested at the price
+    prevailing on the ex-div date (approximated as statement price for that ticker).
+    """
     div_txs = [t for t in txs if t["type"] == "Dividend"]
     if not div_txs:
-        return None
-    df = pd.DataFrame(div_txs)
-    df["month"] = df["date"].dt.to_period("M").astype(str)
-    mg = df.groupby("month")["credit"].sum().reset_index()
-    fig = go.Figure(go.Bar(
-        x=mg["month"], y=mg["credit"],
-        marker=dict(color=TEAL, opacity=0.85, line=dict(width=0)),
-        text=[f"GHS {v:,.2f}" for v in mg["credit"]], textposition="outside",
-        textfont=dict(color=p.TEXT2, size=9, family="DM Mono"),
-        hovertemplate="%{x}<br>Dividends: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.update_layout(**T(title="Dividend Income by Month", yt="GHS"), height=280)
-    return fig
+        return None, 0.0
+
+    # Map ticker → current price for reinvestment
+    price_map = {e["ticker"]: (e["live_price"] or e["statement_price"]) for e in eq}
+    avg_price = np.mean(list(price_map.values())) if price_map else 1.0
+
+    # For each dividend, estimate shares that would have been bought
+    extra_value = 0.0
+    drip_rows   = []
+    for t in div_txs:
+        div_amt = t["credit"]
+        # Try to guess ticker from description
+        guessed_ticker = None
+        for ticker in price_map:
+            if ticker in t["description"].upper():
+                guessed_ticker = ticker
+                break
+        price = price_map.get(guessed_ticker, avg_price) if guessed_ticker else avg_price
+        shares_bought = div_amt / price if price else 0
+        current_value = shares_bought * price
+        extra_value  += current_value
+        drip_rows.append({"date":t["date"],"amount":div_amt,
+                          "guessed_ticker":guessed_ticker or "?",
+                          "price_at_reinvest":round(price,4),
+                          "extra_shares":round(shares_bought,4),
+                          "current_value":round(current_value,2)})
+
+    return drip_rows, extra_value
 
 
-def chart_rolling_return(txs, total_value):
-    p  = th()
-    df = pd.DataFrame(txs).sort_values("date")
-    if df.empty:
-        return None
-    df["net"]   = df["credit"] - df["debit"]
-    df["cumul"] = df["net"].cumsum()
-    scale = total_value / df["cumul"].iloc[-1] if df["cumul"].iloc[-1] else 1
-    df["proxy_value"] = df["cumul"] * scale
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["proxy_value"], mode="lines",
-        fill="tozeroy", fillcolor="rgba(6,182,212,0.08)",
-        line=dict(color=TEAL, width=2.5), name="Est. Portfolio Value",
-        hovertemplate="%{x|%b %d, %Y}<br>Est. Value: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["date"], y=df["cumul"], mode="lines",
-        line=dict(color=GOLD, width=1.5, dash="dot"), name="Net Invested",
-        hovertemplate="%{x|%b %d, %Y}<br>Invested: GHS %{y:,.2f}<extra></extra>",
-    ))
-    fig.update_layout(**T(title="Estimated Portfolio Value Over Time", xt="Date", yt="GHS"), height=320)
-    return fig
+# ─────────────────────────────────────────────────────────────────────────────
+# MULTI-STATEMENT TIMELINE
+# ─────────────────────────────────────────────────────────────────────────────
+def build_timeline(all_statements):
+    """
+    Given a list of parsed statement dicts (sorted by report_date),
+    build a timeline DataFrame: date, total_value, equities_val, cash_val,
+    gain_loss, net_invested, roi.
+    """
+    rows = []
+    for s in all_statements:
+        eq  = s["equities"]
+        ps  = s["portfolio_summary"]
+        txs = s["transactions"]
+        ev  = sum(e["market_value"] for e in eq)
+        cv  = ps.get("Cash",{}).get("value",0)
+        fv  = ps.get("Funds",{}).get("value",0)
+        tv  = ev + cv + fv
+        tc  = sum(e["total_cost"] for e in eq)
+        tg  = sum(e["gain_loss"] for e in eq)
+        nc  = sum(t["credit"] for t in txs if t["type"]=="Credit")
+        nw  = sum(t["debit"]  for t in txs if t["type"]=="Withdrawal")
+        ni  = nc - nw
+        roi = (tv-ni)/ni*100 if ni>0 else 0
+        # Parse date
+        try:
+            dt = datetime.strptime(s["report_date"], "%d/%m/%Y")
+        except:
+            try: dt = datetime.strptime(s["report_date"], "%B %d, %Y")
+            except: dt = datetime.now()
+        rows.append({"date":dt,"label":s["report_date"],"total_value":tv,
+                     "equities_val":ev,"cash_val":cv,"funds_val":fv,
+                     "total_cost":tc,"gain_loss":tg,"net_invested":ni,"roi":roi,
+                     "n_stocks":len(eq)})
+    df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+    df["mom_change"] = df["total_value"].diff()
+    df["mom_pct"]    = df["total_value"].pct_change()*100
+    return df
 
 
-def chart_price_comparison(eq):
-    p  = th()
-    df = pd.DataFrame(eq)
-    df = df[df["live_price"].notna()].copy()
-    if df.empty:
-        return None
-    df["pct_diff"] = (df["live_price"] - df["statement_price"]) / df["statement_price"] * 100
-    fig = go.Figure()
-    fig.add_trace(go.Bar(name="Statement Price", x=df["ticker"], y=df["statement_price"],
-                         marker_color=AMBER, opacity=0.8))
-    fig.add_trace(go.Bar(name="Live Price",      x=df["ticker"], y=df["live_price"],
-                         marker_color=EMERALD,   opacity=0.9))
-    for _, row in df.iterrows():
-        c = EMERALD if row["pct_diff"] >= 0 else RUBY
-        fig.add_annotation(x=row["ticker"], y=max(row["statement_price"], row["live_price"]),
-                           text=f"{row['pct_diff']:+.1f}%", showarrow=False, yshift=12,
-                           font=dict(color=c, size=9, family="DM Mono"))
-    fig.update_layout(**T(title="Statement vs Live Price", yt="GHS per Share"), barmode="group", height=320)
-    return fig
+# ─────────────────────────────────────────────────────────────────────────────
+# STATEMENT DIFF
+# ─────────────────────────────────────────────────────────────────────────────
+def diff_statements(old_s, new_s):
+    old_eq = {e["ticker"]: e for e in old_s["equities"]}
+    new_eq = {e["ticker"]: e for e in new_s["equities"]}
+    old_ev = sum(e["market_value"] for e in old_s["equities"])
+    new_ev = sum(e["market_value"] for e in new_s["equities"])
+    rows = []
+    all_tickers = set(old_eq) | set(new_eq)
+    for t in sorted(all_tickers):
+        if t in new_eq and t not in old_eq:
+            e = new_eq[t]
+            wt = e["market_value"]/new_ev*100 if new_ev else 0
+            rows.append({"Ticker":t,"Status":"🟢 NEW","Sector":e["sector"],
+                         "Old Weight":"—","New Weight":f"{wt:.1f}%",
+                         "Qty Change":f"+{e['qty']:,.0f}",
+                         "Value Change":f"+GHS {e['market_value']:,.2f}",
+                         "Return":f"{e['gain_pct']:+.1f}%"})
+        elif t in old_eq and t not in new_eq:
+            e = old_eq[t]
+            rows.append({"Ticker":t,"Status":"🔴 EXITED","Sector":e["sector"],
+                         "Old Weight":f"{e['market_value']/old_ev*100:.1f}%" if old_ev else "—",
+                         "New Weight":"—","Qty Change":f"-{e['qty']:,.0f}",
+                         "Value Change":f"-GHS {e['market_value']:,.2f}",
+                         "Return":f"{e['gain_pct']:+.1f}%"})
+        else:
+            oe=old_eq[t]; ne=new_eq[t]
+            old_wt=oe["market_value"]/old_ev*100 if old_ev else 0
+            new_wt=ne["market_value"]/new_ev*100 if new_ev else 0
+            mv_chg=ne["market_value"]-oe["market_value"]
+            qty_chg=ne["qty"]-oe["qty"]
+            if abs(mv_chg) < 0.01 and abs(qty_chg) < 0.01:
+                status = "➡️ UNCHANGED"
+            elif new_wt > old_wt:
+                status = "⬆️ INCREASED"
+            else:
+                status = "⬇️ REDUCED"
+            rows.append({"Ticker":t,"Status":status,"Sector":ne["sector"],
+                         "Old Weight":f"{old_wt:.1f}%","New Weight":f"{new_wt:.1f}%",
+                         "Qty Change":f"{qty_chg:+,.0f}",
+                         "Value Change":f"{'+'if mv_chg>=0 else ''}GHS {mv_chg:,.2f}",
+                         "Return":f"{ne['gain_pct']:+.1f}%"})
+    return pd.DataFrame(rows)
 
 
-def chart_stock_weight(eq):
-    p  = th()
-    df = pd.DataFrame(eq).sort_values("market_value")
-    tot= df["market_value"].sum()
-    df["weight"] = df["market_value"] / tot * 100
-    fig = go.Figure(go.Bar(
-        x=df["weight"], y=df["ticker"], orientation="h",
-        marker=dict(color=df["weight"],
-                    colorscale=[[0,AZURE],[0.4,VIOLET],[1,GOLD]],
-                    line=dict(width=0)),
-        text=[f"{w:.1f}%" for w in df["weight"]], textposition="outside",
-        textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
-        customdata=df["market_value"],
-        hovertemplate="<b>%{y}</b><br>Weight: %{x:.2f}%<br>GHS %{customdata:,.2f}<extra></extra>",
-    ))
-    fig.update_layout(**T(title="Portfolio Weight by Stock", xt="Weight (%)"), height=340, showlegend=False)
-    return fig
+# ─────────────────────────────────────────────────────────────────────────────
+# PROJECTION ENGINE
+# ─────────────────────────────────────────────────────────────────────────────
+def project_portfolio(current_value, cagr_pct, target_value, years_max=20):
+    """Return DataFrame of projected values with optimistic / pessimistic bands."""
+    if cagr_pct <= 0 or current_value <= 0: return None
+    base   = cagr_pct / 100
+    bull   = base * 1.4
+    bear   = base * 0.6
+    rows   = []
+    yr     = 0
+    for yr in np.arange(0, years_max + 0.25, 0.25):
+        rows.append({
+            "years": yr,
+            "date": datetime.now() + timedelta(days=yr*365.25),
+            "base":  current_value * (1+base)**yr,
+            "bull":  current_value * (1+bull)**yr,
+            "bear":  current_value * (1+bear)**yr,
+        })
+    df = pd.DataFrame(rows)
+    # Find when base crosses target
+    hits = df[df["base"] >= target_value]
+    hit_date = hits.iloc[0]["date"] if not hits.empty else None
+    return df, hit_date
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HTML REPORT EXPORT
+# ─────────────────────────────────────────────────────────────────────────────
+def build_html_report(data, eq, txs, ps, m, am):
+    p = th()
+    ev = m["ev"]
+    def row(label, val, color=""):
+        c = f"color:{color};" if color else ""
+        return f"<tr><td>{label}</td><td style='text-align:right;font-family:monospace;{c}'>{val}</td></tr>"
+
+    stock_rows = ""
+    for e in sorted(eq, key=lambda x: x["market_value"], reverse=True):
+        wt  = e["market_value"]/ev*100 if ev else 0
+        clr = "#00d485" if e["gain_pct"]>=0 else "#ff3960"
+        stock_rows += f"""<tr>
+          <td><b>{e['ticker']}</b></td>
+          <td>{e['sector']}</td>
+          <td style='text-align:right'>{e['qty']:,.0f}</td>
+          <td style='text-align:right'>{e['avg_cost']:.4f}</td>
+          <td style='text-align:right'>{(e['live_price'] or e['statement_price']):.4f}</td>
+          <td style='text-align:right;color:{clr}'>{e['gain_pct']:+.1f}%</td>
+          <td style='text-align:right'>GHS {e['market_value']:,.2f}</td>
+          <td style='text-align:right'>{wt:.1f}%</td>
+        </tr>"""
+
+    generated = datetime.now().strftime("%d %B %Y at %H:%M")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IC Portfolio Report — {data['client_name']}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;900&family=Epilogue:wght@400;600;700&family=DM+Mono:wght@400;500&display=swap');
+  *{{box-sizing:border-box;margin:0;padding:0;}}
+  body{{background:#04060f;color:#eef0fa;font-family:'Epilogue',sans-serif;padding:40px;max-width:1100px;margin:0 auto;}}
+  h1{{font-family:'Fraunces',serif;font-size:2.4rem;font-weight:600;
+      background:linear-gradient(135deg,#eef0fa 0%,#e8b438 55%,#f59e0b 100%);
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+      margin-bottom:6px;}}
+  h2{{font-family:'Epilogue',sans-serif;font-size:1rem;font-weight:700;color:#e8b438;
+      text-transform:uppercase;letter-spacing:.1em;border-bottom:1px solid #141838;
+      padding-bottom:8px;margin:32px 0 16px;}}
+  .badge{{display:inline-block;background:rgba(232,180,56,0.1);color:#e8b438;
+          border:1px solid rgba(232,180,56,0.25);font-size:.65rem;font-weight:800;
+          padding:3px 11px;border-radius:10px;letter-spacing:.09em;text-transform:uppercase;
+          margin-bottom:12px;font-family:'Epilogue',sans-serif;}}
+  .meta{{color:#424870;font-size:.8rem;margin-bottom:32px;font-family:'DM Mono',monospace;}}
+  .kpi-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px;}}
+  .kpi-box{{background:#08091e;border:1px solid #141838;border-radius:12px;padding:16px 18px;}}
+  .kpi-label{{font-size:.6rem;color:#424870;text-transform:uppercase;letter-spacing:.1em;
+              font-weight:700;margin-bottom:8px;}}
+  .kpi-value{{font-size:1.3rem;font-family:'DM Mono',monospace;font-weight:500;color:#eef0fa;}}
+  .pos{{color:#00d485;}}.neg{{color:#ff3960;}}
+  table{{width:100%;border-collapse:collapse;font-size:.82rem;margin-bottom:16px;}}
+  thead th{{background:#0c1028;color:#8898c8;font-size:.65rem;text-transform:uppercase;
+            letter-spacing:.08em;padding:10px 12px;text-align:left;border-bottom:1px solid #141838;}}
+  tbody tr{{border-bottom:1px solid #0c1028;}}
+  tbody tr:hover{{background:#08091e;}}
+  tbody td{{padding:9px 12px;color:#eef0fa;font-family:'DM Mono',monospace;font-size:.8rem;}}
+  .footer{{margin-top:48px;padding-top:16px;border-top:1px solid #141838;
+           font-size:.72rem;color:#424870;display:flex;justify-content:space-between;
+           font-family:'Epilogue',sans-serif;}}
+  @media print{{body{{background:#fff;color:#000;}}
+    h1{{-webkit-text-fill-color:#000;}}
+    .kpi-box{{background:#f9f9f9;border-color:#ddd;}}}}
+</style>
+</head>
+<body>
+<div class="badge">IC Securities · Ghana Stock Exchange</div>
+<h1>IC Portfolio Report</h1>
+<div class="meta">
+  Client: <b style="color:#eef0fa">{data['client_name']}</b> &nbsp;·&nbsp;
+  Account: <b style="color:#e8b438">{data['account_number']}</b> &nbsp;·&nbsp;
+  Statement Date: {data['report_date']} &nbsp;·&nbsp;
+  Generated: {generated}
+</div>
+
+<h2>Portfolio Summary</h2>
+<div class="kpi-grid">
+  <div class="kpi-box"><div class="kpi-label">Total Value</div>
+    <div class="kpi-value">GHS {m['tv']:,.2f}</div></div>
+  <div class="kpi-box"><div class="kpi-label">Unrealised G/L</div>
+    <div class="kpi-value {'pos' if m['tg']>=0 else 'neg'}">
+      {'+'if m['tg']>=0 else ''}GHS {m['tg']:,.2f}</div></div>
+  <div class="kpi-box"><div class="kpi-label">ROI (net cash)</div>
+    <div class="kpi-value {'pos' if m['roi']>=0 else 'neg'}">{m['roi']:+.2f}%</div></div>
+  <div class="kpi-box"><div class="kpi-label">CAGR</div>
+    <div class="kpi-value {'pos' if (m['cagr'] or 0)>=0 else 'neg'}">
+      {f"{m['cagr']:+.2f}%" if m['cagr'] else '—'}</div></div>
+  <div class="kpi-box"><div class="kpi-label">Health Score</div>
+    <div class="kpi-value">{m['hs']}/100</div></div>
+  <div class="kpi-box"><div class="kpi-label">Win Rate</div>
+    <div class="kpi-value">{m['winners']}/{len(eq)} ({m['winners']/len(eq)*100:.0f}%)</div></div>
+  <div class="kpi-box"><div class="kpi-label">Dividend Income</div>
+    <div class="kpi-value">GHS {m['div']:,.2f}</div></div>
+  <div class="kpi-box"><div class="kpi-label">Sharpe Ratio</div>
+    <div class="kpi-value">{f"{am['sharpe']:+.2f}" if am['sharpe'] else '—'}</div></div>
+</div>
+
+<h2>Holdings ({len(eq)} positions)</h2>
+<table>
+  <thead><tr>
+    <th>Ticker</th><th>Sector</th><th>Qty</th><th>Avg Cost</th>
+    <th>Current Price</th><th>Return</th><th>Market Value</th><th>Weight</th>
+  </tr></thead>
+  <tbody>{stock_rows}</tbody>
+</table>
+
+<h2>Asset Allocation</h2>
+<table>
+  <thead><tr><th>Asset Class</th><th>Value</th><th>Allocation</th></tr></thead>
+  <tbody>
+    {''.join(f"<tr><td>{k}</td><td>GHS {v['value']:,.2f}</td><td>{v['alloc']:.1f}%</td></tr>" for k,v in ps.items() if k!='Total' and isinstance(v,dict))}
+  </tbody>
+</table>
+
+<div class="footer">
+  <span>IC Portfolio Analyser v4.0 · Elite Edition</span>
+  <span>For informational purposes only · Past performance ≠ future results</span>
+  <span>Prices via dev.kwayisi.org/apis/gse</span>
+</div>
+</body>
+</html>"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1189,58 +874,459 @@ def chart_stock_weight(eq):
 # ─────────────────────────────────────────────────────────────────────────────
 def generate_alerts(eq, m, txs):
     alerts = []
-    ev     = m["equities_val"]
-
+    ev = m["ev"]
     for e in eq:
-        wt = e["market_value"] / ev * 100 if ev else 0
+        wt = e["market_value"]/ev*100 if ev else 0
         if wt > 30:
-            alerts.append(("danger", f"Extreme Concentration: {e['ticker']}",
-                f"{e['ticker']} is {wt:.1f}% of equities — far above the 30% danger threshold. "
-                f"A single adverse event could cause significant portfolio damage."))
+            alerts.append(("danger",f"Extreme Concentration: {e['ticker']}",
+                f"{e['ticker']} is {wt:.1f}% of equities — far above the 30% danger threshold."))
         elif wt > 20:
-            alerts.append(("warn", f"High Concentration: {e['ticker']}",
-                f"{e['ticker']} is {wt:.1f}% of the equity book. Consider trimming to below 15%."))
-
+            alerts.append(("warn",f"High Concentration: {e['ticker']}",
+                f"{e['ticker']} is {wt:.1f}% of equities. Consider trimming to below 15%."))
     big_losers = [e for e in eq if e["gain_pct"] < -20]
     if big_losers:
-        names = ", ".join(e["ticker"] for e in big_losers)
         alerts.append(("warn","Deep Losses > 20%",
-            f"{names} are down more than 20% from cost basis. Re-evaluate the investment thesis "
-            f"or establish stop-loss levels."))
-
-    if m["total_value"] and m["cash_val"] / m["total_value"] > 0.25:
+            f"{', '.join(e['ticker'] for e in big_losers)} — down >20% from cost. Review thesis or set stop-loss levels."))
+    if m["tv"] and m["cv"]/m["tv"] > 0.25:
         alerts.append(("info","High Cash Drag",
-            f"Cash represents {m['cash_val']/m['total_value']*100:.1f}% of the portfolio. "
-            f"Idle cash erodes real returns in a high-inflation environment."))
-
+            f"Cash is {m['cv']/m['tv']*100:.1f}% of portfolio — idle cash erodes real returns at Ghana's inflation rate."))
     sec_df = pd.DataFrame(eq).groupby("sector")["market_value"].sum()
     if ev:
         for sec, val in sec_df.items():
-            if val / ev > 0.60:
-                alerts.append(("warn", f"Sector Over-exposure: {sec}",
-                    f"{sec} stocks represent {val/ev*100:.1f}% of equity holdings. "
-                    f"Add cross-sector diversification to reduce idiosyncratic risk."))
-
-    if m["winners"] / len(eq) < 0.40:
-        alerts.append(("warn","Low Win Rate",
-            f"Only {m['winners']}/{len(eq)} positions are profitable. "
-            f"Review underperformers for potential rebalancing opportunities."))
-
-    if m["sectors_used"] == 1:
+            if val/ev > 0.60:
+                alerts.append(("warn",f"Sector Over-exposure: {sec}",
+                    f"{sec} is {val/ev*100:.1f}% of equities. Add cross-sector diversification."))
+    if m["su"] == 1:
         alerts.append(("danger","Single-Sector Portfolio",
-            "All equity positions are in the same sector. "
-            "You have zero sector diversification — any sector-wide shock is fully absorbed."))
-    elif m["sectors_used"] < 3 and len(eq) >= 5:
+            "All positions are in one sector — zero sector diversification."))
+    elif m["su"] < 3 and len(eq) >= 5:
         alerts.append(("warn","Limited Sector Diversification",
-            f"Only {m['sectors_used']} sectors across {len(eq)} holdings. "
-            f"Consider adding exposure to Banking, Telecom, or Oil & Gas to broaden the base."))
-
+            f"Only {m['su']} sectors across {len(eq)} holdings."))
+    if m["winners"]/len(eq) < 0.40:
+        alerts.append(("warn","Low Win Rate",
+            f"Only {m['winners']}/{len(eq)} positions are profitable."))
+    # Real return warning
+    if m["cagr"] is not None and m["years"] >= 0.5:
+        rr = real_return(m["cagr"], m["years"])
+        if rr and rr[0] < 0:
+            alerts.append(("danger","Negative Real Return",
+                f"Your CAGR of {m['cagr']:.1f}% is BELOW Ghana inflation ({rr[1]:.1f}% avg). "
+                f"Real return: {rr[0]:+.1f}%. Your wealth is shrinking in real terms."))
+        elif rr and rr[0] < 5:
+            alerts.append(("warn","Low Real Return",
+                f"After ~{rr[1]:.1f}% avg inflation your real CAGR is only {rr[0]:+.1f}%."))
     if not alerts:
         alerts.append(("ok","Portfolio Health: Good",
-            "No critical concentration issues detected. Win rate is acceptable and sector "
-            "diversification is reasonable. Continue monitoring quarterly."))
-
+            "No critical issues detected. Sector diversification and concentration are reasonable."))
     return alerts
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CHARTS
+# ─────────────────────────────────────────────────────────────────────────────
+def chart_gain_loss(eq):
+    p  = th(); df = pd.DataFrame(eq).sort_values("gain_pct")
+    clr = [EMERALD if v>=0 else RUBY for v in df["gain_pct"]]
+    fig = go.Figure(go.Bar(x=df["gain_pct"], y=df["ticker"], orientation="h",
+        marker=dict(color=clr, opacity=0.85, line=dict(width=0)),
+        text=[f"{v:+.1f}%" for v in df["gain_pct"]], textposition="outside",
+        textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
+        hovertemplate="<b>%{y}</b><br>Return: %{x:.2f}%<extra></extra>"))
+    fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
+    fig.update_layout(**T(title="Return per Stock (%)", xt="Return (%)"), height=380)
+    return fig
+
+def chart_sector_donut(eq):
+    p  = th(); df = pd.DataFrame(eq)
+    sd = df.groupby("sector")["market_value"].sum().reset_index().sort_values("market_value",ascending=False)
+    clr = [SECTOR_COLORS.get(s, p.MUTED) for s in sd["sector"]]
+    fig = go.Figure(go.Pie(labels=sd["sector"], values=sd["market_value"], hole=0.62,
+        marker=dict(colors=clr, line=dict(color=p.BG, width=3)),
+        texttemplate="<b>%{label}</b><br>%{percent:.1%}",
+        textfont=dict(size=11, family="Epilogue"),
+        hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f}<br>%{percent:.1%}<extra></extra>",
+        sort=False))
+    layout = T(title="Sector Allocation")
+    layout["annotations"] = [dict(
+        text=f"<b>{len(sd)}</b><br><span style='font-size:9px'>Sectors</span>",
+        x=0.5, y=0.5, font=dict(size=18, color=p.TEXT, family="DM Mono"), showarrow=False)]
+    layout["height"] = 340
+    fig.update_layout(**layout)
+    return fig
+
+def chart_performance_attribution(eq, ev):
+    p  = th(); df = pd.DataFrame(eq).copy()
+    df["cp"] = (df["gain_loss"]/ev*100) if ev else 0
+    df = df.sort_values("cp")
+    clr = [EMERALD if v>=0 else RUBY for v in df["cp"]]
+    fig = go.Figure(go.Bar(x=df["cp"], y=df["ticker"], orientation="h",
+        marker=dict(color=clr, opacity=0.85, line=dict(width=0)),
+        text=[f"{v:+.2f}%" for v in df["cp"]], textposition="outside",
+        textfont=dict(color=p.TEXT2, size=10, family="DM Mono"),
+        customdata=df["gain_loss"],
+        hovertemplate="<b>%{y}</b><br>Contribution: %{x:+.2f}%<br>P&L: GHS %{customdata:,.2f}<extra></extra>"))
+    fig.add_vline(x=0, line_color=p.MUTED, line_dash="dash", line_width=1)
+    fig.update_layout(**T(title="Performance Attribution",
+                          xt="Contribution (% of equity value)"), height=380)
+    return fig
+
+def chart_sector_performance(eq):
+    p  = th(); df = pd.DataFrame(eq)
+    sg = df.groupby("sector").agg(mv=("market_value","sum"),tc=("total_cost","sum"),
+                                   gl=("gain_loss","sum")).reset_index().sort_values("mv",ascending=False)
+    sg["ret"] = sg["gl"]/sg["tc"]*100
+    fig = make_subplots(rows=1,cols=2,subplot_titles=["Market Value vs Cost by Sector","Sector Return (%)"],
+                        column_widths=[0.6,0.4])
+    fig.add_trace(go.Bar(name="Cost Basis",x=sg["sector"],y=sg["tc"],marker_color=AZURE,opacity=0.65),row=1,col=1)
+    fig.add_trace(go.Bar(name="Market Value",x=sg["sector"],y=sg["mv"],marker_color=GOLD,opacity=0.9),row=1,col=1)
+    bc = [EMERALD if v>=0 else RUBY for v in sg["ret"]]
+    fig.add_trace(go.Bar(name="Return %",x=sg["sector"],y=sg["ret"],
+        marker=dict(color=bc,opacity=0.85),text=[f"{v:+.1f}%" for v in sg["ret"]],
+        textposition="outside",textfont=dict(size=10,family="DM Mono",color=p.TEXT2),
+        showlegend=False),row=1,col=2)
+    fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",row=1,col=2)
+    layout = {**T(),"barmode":"group","height":360,
+              "xaxis":dict(tickangle=-20,gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+              "xaxis2":dict(tickangle=-20,gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+              "yaxis":dict(title=dict(text="GHS"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+              "yaxis2":dict(title=dict(text="Return (%)"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED))}
+    fig.update_layout(**layout)
+    return fig
+
+def chart_market_vs_cost(eq):
+    p  = th(); df = pd.DataFrame(eq).sort_values("market_value",ascending=False)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(name="Cost Basis",x=df["ticker"],y=df["total_cost"],
+                         marker_color=AZURE,opacity=0.7,hovertemplate="%{x}: GHS %{y:,.2f}<extra>Cost</extra>"))
+    fig.add_trace(go.Bar(name="Market Value",x=df["ticker"],y=df["market_value"],
+                         marker_color=GOLD,opacity=0.9,hovertemplate="%{x}: GHS %{y:,.2f}<extra>Market</extra>"))
+    for _,row in df.iterrows():
+        gl=row["gain_pct"]
+        fig.add_annotation(x=row["ticker"],y=max(row["total_cost"],row["market_value"]),
+                           text=f"{gl:+.1f}%",showarrow=False,yshift=12,
+                           font=dict(color=EMERALD if gl>=0 else RUBY,size=9,family="DM Mono"))
+    fig.update_layout(**T(title="Market Value vs Cost Basis", yt="GHS"), barmode="group", height=380)
+    return fig
+
+def chart_pl_waterfall(eq):
+    p  = th(); df = pd.DataFrame(eq).sort_values("gain_loss")
+    total = df["gain_loss"].sum()
+    tickers = df["ticker"].tolist()+["TOTAL"]; vals = df["gain_loss"].tolist()+[total]
+    clr = [EMERALD if v>=0 else RUBY for v in vals]; clr[-1] = GOLD if total>=0 else RUBY
+    fig = go.Figure(go.Bar(x=tickers,y=vals,
+        marker=dict(color=clr,opacity=[0.8]*len(df)+[1.0],line=dict(width=0)),
+        text=[f"{'+'if v>=0 else ''}GHS {v:,.0f}" for v in vals],
+        textposition="outside",textfont=dict(color=p.TEXT2,size=10,family="DM Mono"),
+        hovertemplate="<b>%{x}</b><br>P&L: GHS %{y:,.2f}<extra></extra>"))
+    fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",line_width=1)
+    fig.update_layout(**T(title="P&L Contribution per Stock (GHS)", yt="GHS"), height=340)
+    return fig
+
+def chart_portfolio_efficiency(eq):
+    p  = th(); df = pd.DataFrame(eq).copy()
+    df["eff"] = df["gain_loss"]/df["total_cost"].replace(0,1)*100
+    df = df.sort_values("eff")
+    clr = [EMERALD if v>=0 else RUBY for v in df["eff"]]
+    fig = go.Figure(go.Bar(x=df["eff"],y=df["ticker"],orientation="h",
+        marker=dict(color=clr,opacity=0.85,line=dict(width=0)),
+        text=[f"{v:+.1f}%" for v in df["eff"]],textposition="outside",
+        textfont=dict(color=p.TEXT2,size=10,family="DM Mono"),
+        customdata=df["gain_loss"],
+        hovertemplate="<b>%{y}</b><br>Efficiency: %{x:+.1f}%<br>P&L: GHS %{customdata:,.2f}<extra></extra>"))
+    fig.add_vline(x=0,line_color=p.MUTED,line_dash="dash",line_width=1)
+    fig.update_layout(**T(title="Portfolio Efficiency — Gain / GHS Invested (%)", xt="ROI (%)"), height=360)
+    return fig
+
+def chart_risk_return_scatter(eq, ev):
+    p  = th(); df = pd.DataFrame(eq).copy()
+    df["weight"] = df["market_value"]/ev*100 if ev else 0
+    ew = 100/len(eq) if eq else 10
+    fig = go.Figure()
+    for sector in df["sector"].unique():
+        sub = df[df["sector"]==sector]
+        fig.add_trace(go.Scatter(x=sub["weight"],y=sub["gain_pct"],
+            mode="markers+text",name=sector,
+            marker=dict(size=sub["market_value"]/sub["market_value"].max()*40+12,
+                        color=SECTOR_COLORS.get(sector,p.MUTED),opacity=0.82,
+                        line=dict(color=p.BG,width=2)),
+            text=sub["ticker"],textposition="top center",
+            textfont=dict(size=9,color=p.TEXT2,family="Epilogue"),
+            customdata=sub[["market_value","gain_loss","sector"]].values,
+            hovertemplate=("<b>%{text}</b><br>Sector: %{customdata[2]}<br>"
+                           "Weight: %{x:.1f}%<br>Return: %{y:+.1f}%<br>"
+                           "MV: GHS %{customdata[0]:,.2f}<extra></extra>")))
+    fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",line_width=1)
+    fig.add_vline(x=ew,line_color=GOLD,line_dash="dot",line_width=1,
+                  annotation_text=f" Equal weight ({ew:.1f}%)",
+                  annotation_font=dict(color=GOLD,size=9,family="DM Mono"))
+    fig.update_layout(**T(title="Risk / Return Matrix — Bubble size = Market Value",
+                          xt="Portfolio Weight (%)", yt="Return (%)"), height=440)
+    return fig
+
+def chart_concentration(eq):
+    p  = th(); df = pd.DataFrame(eq)
+    tot = df["market_value"].sum(); w = df["market_value"]/tot
+    hhi = round((w**2).sum()*10000)
+    if hhi<1500: risk,rc="Low",EMERALD
+    elif hhi<2500: risk,rc="Moderate",AMBER
+    else: risk,rc="High",RUBY
+    fig = make_subplots(rows=1,cols=2,subplot_titles=["HHI Concentration Score","Exposure by Stock"],
+                        specs=[[{"type":"indicator"},{"type":"xy"}]])
+    fig.add_trace(go.Indicator(mode="gauge+number+delta",value=hhi,
+        delta=dict(reference=1500,valueformat=".0f",increasing=dict(color=RUBY),decreasing=dict(color=EMERALD)),
+        number=dict(font=dict(color=rc,size=34,family="DM Mono"),suffix=" HHI"),
+        gauge=dict(axis=dict(range=[0,10000],tickcolor=p.MUTED,tickfont=dict(color=p.MUTED,size=8,family="DM Mono")),
+                   bar=dict(color=rc,thickness=0.28),bgcolor=p.CARD2,bordercolor=p.BORDER,
+                   steps=[dict(range=[0,1500],color="rgba(0,212,133,0.1)"),
+                          dict(range=[1500,2500],color="rgba(245,158,11,0.1)"),
+                          dict(range=[2500,10000],color="rgba(255,57,96,0.1)")],
+                   threshold=dict(line=dict(color=rc,width=3),thickness=0.8,value=hhi)),
+        title=dict(text=f"<b>{risk}</b> Concentration",font=dict(color=rc,size=13,family="Epilogue"))),row=1,col=1)
+    df_s = df.sort_values("market_value",ascending=True)
+    ws   = (df_s["market_value"]/tot*100).values
+    fig.add_trace(go.Bar(x=ws,y=df_s["ticker"].values,orientation="h",
+        marker=dict(color=[SECTOR_COLORS.get(s,p.MUTED) for s in df_s["sector"]],line=dict(width=0),opacity=0.85),
+        text=[f"{v:.1f}%" for v in ws],textposition="outside",
+        textfont=dict(color=p.TEXT2,size=10,family="DM Mono"),
+        customdata=df_s["sector"].values,
+        hovertemplate="<b>%{y}</b>: %{x:.1f}%<br>Sector: %{customdata}<extra></extra>",
+        showlegend=False),row=1,col=2)
+    layout = {"paper_bgcolor":p.BG,"plot_bgcolor":p.CARD,"font":dict(color=p.TEXT2,family="DM Mono"),
+              "margin":dict(l=16,r=16,t=60,b=16),"height":380,
+              "xaxis2":dict(gridcolor=p.BORDER,title=dict(text="Weight (%)"),tickfont=dict(color=p.MUTED)),
+              "yaxis2":dict(gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+              "hoverlabel":dict(bgcolor=p.CARD2,bordercolor=p.BORDER,font=dict(color=p.TEXT)),
+              "legend":dict(bgcolor=p.CARD2,bordercolor=p.BORDER),
+              "title":dict(font=dict(color=p.TEXT,family="Epilogue",size=14),x=0.01)}
+    fig.update_layout(**layout)
+    return fig, hhi, risk, rc
+
+def chart_breakeven(eq):
+    p      = th(); losers=[e for e in eq if e["gain_pct"]<0]
+    if not losers: return None
+    df = pd.DataFrame(losers); pc = df["live_price"].fillna(df["statement_price"])
+    pct_need=(df["avg_cost"]-pc)/pc*100; gap_ghs=(df["avg_cost"]-pc)*df["qty"]
+    fig = make_subplots(rows=1,cols=2,subplot_titles=["Price Gap to Break-even","GHS Loss to Recover"],
+                        specs=[[{"type":"xy"},{"type":"xy"}]])
+    fig.add_trace(go.Bar(name="Current Price",x=df["ticker"],y=pc,marker_color=RUBY,opacity=0.8),row=1,col=1)
+    fig.add_trace(go.Bar(name="Break-even",x=df["ticker"],y=df["avg_cost"],marker_color=GOLD,opacity=0.8),row=1,col=1)
+    fig.add_trace(go.Scatter(name="% Rally Needed",x=df["ticker"],y=pct_need,yaxis="y2",
+        mode="markers+text",marker=dict(size=13,color=AMBER,symbol="diamond",line=dict(color=p.BG,width=2)),
+        text=[f"+{v:.1f}%" for v in pct_need],textposition="top center",
+        textfont=dict(color=AMBER,size=9,family="DM Mono")),row=1,col=1)
+    fig.add_trace(go.Bar(name="GHS to Recover",x=df["ticker"],y=gap_ghs.abs(),
+        marker=dict(color=gap_ghs.abs(),colorscale=[[0,GOLD],[1,RUBY]],line=dict(width=0)),
+        text=[f"GHS {v:,.0f}" for v in gap_ghs.abs()],textposition="outside",
+        textfont=dict(size=9,family="DM Mono")),row=1,col=2)
+    layout = {**T(),"title":dict(text="Break-even Analysis",font=dict(color=p.TEXT,family="Epilogue",size=14),x=0.01),
+              "barmode":"group","height":380,
+              "yaxis":dict(title=dict(text="Price (GHS)"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+              "yaxis2":dict(title=dict(text="% Rally Needed"),overlaying="y",side="right",showgrid=False,
+                            color=AMBER,tickfont=dict(color=AMBER,family="DM Mono")),
+              "yaxis3":dict(title=dict(text="GHS to Recover"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+              "xaxis2":dict(gridcolor=p.BORDER,tickfont=dict(color=p.MUTED))}
+    fig.update_layout(**layout)
+    return fig
+
+def chart_cashflow(txs):
+    p  = th(); df=pd.DataFrame(txs)
+    if df.empty: return None
+    df["month"]=df["date"].dt.to_period("M")
+    mg=df.groupby("month").agg(credits=("credit","sum"),debits=("debit","sum")).reset_index()
+    mg["month_str"]=mg["month"].astype(str); mg["net"]=mg["credits"]-mg["debits"]; mg["cumnet"]=mg["net"].cumsum()
+    fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[0.65,0.35],vertical_spacing=0.06,
+                      subplot_titles=["Monthly Credits & Debits","Cumulative Net Flow"])
+    fig.add_trace(go.Bar(name="Credits",x=mg["month_str"],y=mg["credits"],marker_color=EMERALD,opacity=0.8),row=1,col=1)
+    fig.add_trace(go.Bar(name="Debits",x=mg["month_str"],y=mg["debits"],marker_color=RUBY,opacity=0.8),row=1,col=1)
+    fig.add_trace(go.Scatter(name="Net",x=mg["month_str"],y=mg["net"],mode="lines+markers",
+                             line=dict(color=GOLD,width=2.5),marker=dict(size=5,color=GOLD)),row=1,col=1)
+    fig.add_trace(go.Bar(name="Cumul",x=mg["month_str"],y=mg["cumnet"],
+                         marker_color=[EMERALD if v>=0 else RUBY for v in mg["cumnet"]],
+                         opacity=0.72,showlegend=False),row=2,col=1)
+    fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",line_width=1,row=1,col=1)
+    fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",line_width=1,row=2,col=1)
+    layout={**T(),"barmode":"group","height":500,
+            "xaxis2":dict(tickangle=-30,gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+            "yaxis":dict(title=dict(text="GHS"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+            "yaxis2":dict(title=dict(text="GHS"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED))}
+    fig.update_layout(**layout)
+    return fig
+
+def chart_dividend_timeline(txs):
+    p  = th(); dt=[t for t in txs if t["type"]=="Dividend"]
+    if not dt: return None
+    df=pd.DataFrame(dt); df["month"]=df["date"].dt.to_period("M").astype(str)
+    mg=df.groupby("month")["credit"].sum().reset_index()
+    fig=go.Figure(go.Bar(x=mg["month"],y=mg["credit"],
+        marker=dict(color=TEAL,opacity=0.85,line=dict(width=0)),
+        text=[f"GHS {v:,.2f}" for v in mg["credit"]],textposition="outside",
+        textfont=dict(color=p.TEXT2,size=9,family="DM Mono"),
+        hovertemplate="%{x}<br>Dividends: GHS %{y:,.2f}<extra></extra>"))
+    fig.update_layout(**T(title="Dividend Income by Month", yt="GHS"), height=280)
+    return fig
+
+def chart_cumulative(txs, tv):
+    p  = th(); df=pd.DataFrame(txs).sort_values("date")
+    if df.empty: return None
+    df["net"]=df["credit"]-df["debit"]; df["cumul"]=df["net"].cumsum()
+    profit=tv-df["cumul"].iloc[-1]
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(x=df["date"],y=df["cumul"],mode="lines",fill="tozeroy",
+        fillcolor="rgba(232,180,56,0.08)",line=dict(color=GOLD,width=2.5),name="Net Invested",
+        hovertemplate="%{x|%b %d, %Y}<br>Invested: GHS %{y:,.2f}<extra></extra>"))
+    fig.add_hline(y=tv,line_color=EMERALD,line_dash="dash",line_width=2,
+                  annotation_text=f" Portfolio Value GHS {tv:,.0f}",
+                  annotation_font=dict(color=EMERALD,size=10,family="DM Mono"))
+    fig.update_layout(**T(title=f"Net Invested vs Current Value ({'+'if profit>=0 else ''}GHS {profit:,.0f} unrealised)",
+                          xt="Date",yt="GHS"), height=320)
+    return fig
+
+def chart_drawdown(txs, tv):
+    p  = th(); df=pd.DataFrame(txs).sort_values("date")
+    if df.empty: return None
+    df["net"]=df["credit"]-df["debit"]; df["cumul"]=df["net"].cumsum()
+    scale=tv/df["cumul"].iloc[-1] if df["cumul"].iloc[-1] else 1
+    df["scaled"]=df["cumul"]*scale
+    peak=df["scaled"].cummax()
+    with np.errstate(divide="ignore",invalid="ignore"):
+        dd=np.where(peak>0,(df["scaled"]-peak)/peak*100,0.0)
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(x=df["date"],y=dd,mode="lines",fill="tozeroy",
+        fillcolor="rgba(255,57,96,0.10)",line=dict(color=RUBY,width=2),name="Drawdown",
+        hovertemplate="%{x|%b %d %Y}<br>Drawdown: %{y:.2f}%<extra></extra>"))
+    fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",line_width=1)
+    fig.update_layout(**T(title="Portfolio Drawdown (%) from Peak",xt="Date",yt="Drawdown (%)"),height=300)
+    return fig
+
+def chart_timeline(df_tl):
+    """Multi-statement equity curve."""
+    p  = th()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_tl["date"],y=df_tl["total_value"],mode="lines+markers",
+        name="Total Value",line=dict(color=GOLD,width=3),marker=dict(size=8,color=GOLD,line=dict(color=p.BG,width=2)),
+        text=df_tl["label"],hovertemplate="<b>%{text}</b><br>Total: GHS %{y:,.2f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=df_tl["date"],y=df_tl["equities_val"],mode="lines+markers",
+        name="Equities",line=dict(color=VIOLET,width=2,dash="dot"),marker=dict(size=6,color=VIOLET),
+        hovertemplate="<b>%{x|%b %Y}</b><br>Equities: GHS %{y:,.2f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=df_tl["date"],y=df_tl["net_invested"],mode="lines",
+        name="Net Invested",line=dict(color=SLATE,width=1.5,dash="dot"),
+        hovertemplate="<b>%{x|%b %Y}</b><br>Net Invested: GHS %{y:,.2f}<extra></extra>"))
+    # Shade area between net_invested and total_value
+    fig.add_trace(go.Scatter(x=pd.concat([df_tl["date"],df_tl["date"].iloc[::-1]]),
+        y=pd.concat([df_tl["total_value"],df_tl["net_invested"].iloc[::-1]]),
+        fill="toself",fillcolor="rgba(232,180,56,0.07)",line=dict(width=0),
+        name="Unrealised Gain",hoverinfo="skip"))
+    fig.update_layout(**T(title="Portfolio Value Over Time — All Statements",xt="Date",yt="GHS"),height=380)
+    return fig
+
+def chart_timeline_roi(df_tl):
+    """ROI over time from multi-statement."""
+    p  = th()
+    clr=[EMERALD if v>=0 else RUBY for v in df_tl["roi"]]
+    fig=go.Figure(go.Bar(x=df_tl["label"],y=df_tl["roi"],
+        marker=dict(color=clr,opacity=0.85,line=dict(width=0)),
+        text=[f"{v:+.1f}%" for v in df_tl["roi"]],textposition="outside",
+        textfont=dict(color=p.TEXT2,size=10,family="DM Mono"),
+        hovertemplate="%{x}<br>ROI: %{y:+.2f}%<extra></extra>"))
+    fig.add_hline(y=0,line_color=p.MUTED,line_dash="dash",line_width=1)
+    fig.update_layout(**T(title="Portfolio ROI at Each Statement Date",yt="ROI (%)"),height=300)
+    return fig
+
+def chart_monthly_heatmap(txs):
+    p  = th()
+    if not txs: return None
+    df=pd.DataFrame(txs); df["year"]=df["date"].dt.year; df["month"]=df["date"].dt.month
+    df["net"]=df["credit"]-df["debit"]
+    pivot=df.groupby(["year","month"])["net"].sum().reset_index().pivot(index="year",columns="month",values="net").fillna(0)
+    months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    z_vals,y_vals=[],[]
+    for yr in sorted(pivot.index,reverse=True):
+        z_vals.append([float(pivot.loc[yr,col]) if col in pivot.columns else 0 for col in range(1,13)])
+        y_vals.append(str(yr))
+    fig=go.Figure(go.Heatmap(z=z_vals,x=months,y=y_vals,
+        colorscale=[[0,RUBY],[0.5,p.CARD2],[1,EMERALD]],zmid=0,
+        text=[[f"GHS {v:+,.0f}" if v!=0 else "—" for v in row] for row in z_vals],
+        texttemplate="%{text}",textfont=dict(size=9,family="DM Mono"),
+        hovertemplate="<b>%{y} %{x}</b><br>Net: GHS %{z:+,.2f}<extra></extra>",
+        showscale=True,colorbar=dict(tickfont=dict(color=p.TEXT2,size=9,family="DM Mono"),
+            outlinecolor=p.BORDER,outlinewidth=1,title=dict(text="GHS",font=dict(color=p.MUTED,size=9)))))
+    hm_layout = T(title="Monthly Net Cash Flow Calendar")
+    hm_layout["margin"] = dict(l=16,r=16,t=80,b=16)
+    hm_layout["xaxis"]  = dict(side="top",gridcolor=p.BORDER,tickcolor=p.MUTED,tickfont=dict(color=p.TEXT2,family="Epilogue"))
+    hm_layout["yaxis"]  = dict(gridcolor=p.BORDER,tickcolor=p.MUTED,tickfont=dict(color=p.TEXT2,family="DM Mono"))
+    hm_layout["height"] = max(200,len(y_vals)*50+90)
+    fig.update_layout(**hm_layout)
+    return fig
+
+def chart_projection(df_proj, current_value, target_value, hit_date):
+    p  = th()
+    fig = go.Figure()
+    # Bear/bull band
+    fig.add_trace(go.Scatter(
+        x=pd.concat([df_proj["date"],df_proj["date"].iloc[::-1]]),
+        y=pd.concat([df_proj["bull"],df_proj["bear"].iloc[::-1]]),
+        fill="toself",fillcolor="rgba(232,180,56,0.08)",line=dict(width=0),
+        name="Optimistic–Pessimistic Band",hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=df_proj["date"],y=df_proj["bull"],mode="lines",
+        name="Optimistic (+40% CAGR)",line=dict(color=EMERALD,width=1.5,dash="dot")))
+    fig.add_trace(go.Scatter(x=df_proj["date"],y=df_proj["bear"],mode="lines",
+        name="Pessimistic (−40% CAGR)",line=dict(color=RUBY,width=1.5,dash="dot")))
+    fig.add_trace(go.Scatter(x=df_proj["date"],y=df_proj["base"],mode="lines",
+        name="Base (current CAGR)",line=dict(color=GOLD,width=3),
+        hovertemplate="%{x|%b %Y}<br>Base: GHS %{y:,.0f}<extra></extra>"))
+    fig.add_hline(y=current_value,line_color=VIOLET,line_dash="dash",line_width=1,
+                  annotation_text=" Current",annotation_font=dict(color=VIOLET,size=9,family="DM Mono"))
+    fig.add_hline(y=target_value,line_color=GOLD,line_dash="dash",line_width=2,
+                  annotation_text=f" Target GHS {target_value:,.0f}",
+                  annotation_font=dict(color=GOLD,size=10,family="DM Mono"))
+    if hit_date:
+        fig.add_vline(x=hit_date,line_color=EMERALD,line_dash="dot",line_width=2,
+                      annotation_text=f" {hit_date.strftime('%b %Y')}",
+                      annotation_font=dict(color=EMERALD,size=10,family="DM Mono"))
+    fig.update_layout(**T(title="Wealth Projection Engine",xt="Date",yt="GHS"),height=420)
+    return fig
+
+def chart_fees_over_time(fee_rows):
+    p  = th()
+    df = pd.DataFrame(fee_rows).sort_values("date")
+    df["cumul_fees"] = df["est_fees"].cumsum()
+    fig = make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[0.5,0.5],
+                        vertical_spacing=0.06,subplot_titles=["Fee per Transaction","Cumulative Fees Paid"])
+    fig.add_trace(go.Bar(name="Buy fees",x=df[df["type"]=="Buy"]["date"],
+                         y=df[df["type"]=="Buy"]["est_fees"],marker_color=AZURE,opacity=0.85),row=1,col=1)
+    fig.add_trace(go.Bar(name="Sell fees",x=df[df["type"]=="Sell"]["date"],
+                         y=df[df["type"]=="Sell"]["est_fees"],marker_color=AMBER,opacity=0.85),row=1,col=1)
+    fig.add_trace(go.Scatter(name="Cumulative",x=df["date"],y=df["cumul_fees"],
+        mode="lines+markers",line=dict(color=RUBY,width=2.5),marker=dict(size=5,color=RUBY)),row=2,col=1)
+    layout={**T(),"barmode":"overlay","height":480,
+            "xaxis2":dict(tickangle=-20,gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+            "yaxis":dict(title=dict(text="GHS fees"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED)),
+            "yaxis2":dict(title=dict(text="Cumulative GHS"),gridcolor=p.BORDER,tickfont=dict(color=p.MUTED))}
+    fig.update_layout(**layout)
+    return fig
+
+def chart_real_vs_nominal(m):
+    """Bar chart comparing nominal CAGR vs real CAGR after Ghana inflation."""
+    p  = th()
+    if m["cagr"] is None or m["years"] < 0.5: return None
+    rr = real_return(m["cagr"], m["years"])
+    if rr is None: return None
+    real_val, avg_cpi = rr
+    categories = ["Nominal CAGR", f"Avg Ghana CPI\n({avg_cpi:.1f}%)", "Real CAGR"]
+    values     = [m["cagr"], -avg_cpi, real_val]
+    clr        = [GOLD, RUBY, EMERALD if real_val >= 0 else RUBY]
+    fig = go.Figure(go.Bar(x=categories, y=values,
+        marker=dict(color=clr, opacity=0.85, line=dict(width=0)),
+        text=[f"{v:+.1f}%" for v in values], textposition="outside",
+        textfont=dict(color=p.TEXT2, size=12, family="DM Mono"),
+        hovertemplate="%{x}: %{y:+.2f}%<extra></extra>"))
+    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
+    fig.add_hline(y=avg_cpi, line_color=RUBY, line_dash="dot", line_width=1,
+                  annotation_text=f" Inflation hurdle {avg_cpi:.1f}%",
+                  annotation_font=dict(color=RUBY, size=9, family="DM Mono"))
+    fig.update_layout(**T(title=f"Nominal vs Real Returns — Ghana CPI {avg_cpi:.1f}% avg",
+                          yt="Annual Return (%)"), height=340)
+    return fig
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1249,588 +1335,169 @@ def generate_alerts(eq, m, txs):
 def render_sidebar():
     p = th()
     with st.sidebar:
-        st.markdown(
-            f"<div style='font-size:.7rem;color:{p.MUTED};font-weight:800;"
-            f"text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;"
-            f"font-family:Epilogue,sans-serif;'>📡 Live GSE Prices</div>",
-            unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size:.7rem;color:{p.MUTED};font-weight:800;"
+                    f"text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;"
+                    f"font-family:Epilogue,sans-serif;'>📡 Live GSE Prices</div>",
+                    unsafe_allow_html=True)
         st.success("✅ GSE-API (dev.kwayisi.org) + afx fallback")
         if st.button("🔄 Refresh Prices", use_container_width=True, type="primary"):
-            st.cache_data.clear()
-            st.rerun()
-        if "pdf_name" in st.session_state:
-            st.caption(f"📄 {st.session_state['pdf_name']}")
-            if st.button("🗑️ Clear Statement", use_container_width=True):
-                st.session_state.pop("pdf_data", None)
-                st.session_state.pop("pdf_name", None)
+            st.cache_data.clear(); st.rerun()
+        if "statements" in st.session_state and st.session_state["statements"]:
+            stmts = st.session_state["statements"]
+            st.markdown(f"<div style='font-size:.72rem;color:{p.MUTED};margin-top:12px;"
+                        f"font-family:Epilogue,sans-serif;'>"
+                        f"<b style='color:{GOLD}'>{len(stmts)}</b> statement(s) loaded</div>",
+                        unsafe_allow_html=True)
+            if st.button("🗑️ Clear All Statements", use_container_width=True):
+                st.session_state["statements"] = []
                 st.rerun()
         st.divider()
-        st.markdown(
-            f"<div style='font-size:.7rem;color:{p.MUTED};line-height:1.7;"
-            f"font-family:Epilogue,sans-serif;'>"
-            f"<b style='color:{GOLD};'>IC Portfolio Analyser v3.0</b><br>"
-            f"Elite Edition · March 2026<br>"
-            f"For informational purposes only.</div>",
-            unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size:.7rem;color:{p.MUTED};line-height:1.7;"
+                    f"font-family:Epilogue,sans-serif;'>"
+                    f"<b style='color:{GOLD};'>IC Portfolio Analyser v4.0</b><br>"
+                    f"Elite Edition · March 2026<br>For informational purposes only.</div>",
+                    unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
-
-# ─────────────────────────────────────────────────────────────────────────────
-# NEW ADVANCED FEATURES
-# ─────────────────────────────────────────────────────────────────────────────
-
-def build_correlation_matrix(eq):
-    """
-    Synthetic correlation matrix.
-    Same-sector pairs: base 0.72 ± return-similarity bonus.
-    Cross-sector pairs: base 0.18 ± return-similarity bonus.
-    Diagonal = 1.0.
-    """
-    tickers = [e["ticker"] for e in eq]
-    sectors = [e["sector"] for e in eq]
-    returns = [e["gain_pct"] for e in eq]
-    n = len(eq)
-    corr = np.eye(n)
-    for i in range(n):
-        for j in range(i+1, n):
-            r_sim  = 1.0 - min(1.0, abs(returns[i] - returns[j]) / 100.0)
-            same   = sectors[i] == sectors[j]
-            base   = 0.72 if same else 0.18
-            bonus  = 0.20 * r_sim
-            c      = round(min(0.98, base + bonus), 2)
-            corr[i, j] = corr[j, i] = c
-    return pd.DataFrame(corr, index=tickers, columns=tickers)
-
-
-def chart_correlation_heatmap(eq):
-    p      = th()
-    corr   = build_correlation_matrix(eq)
-    tickers = corr.columns.tolist()
-    z      = corr.values
-    # Custom diverging colorscale centred on 0.4
-    cscale = [
-        [0.0,  p.CARD2],
-        [0.3,  AZURE + "99"],
-        [0.55, VIOLET + "bb"],
-        [0.8,  GOLD   + "cc"],
-        [1.0,  GOLD],
-    ]
-    text   = [[f"{z[i,j]:.2f}" for j in range(len(tickers))] for i in range(len(tickers))]
-    fig    = go.Figure(go.Heatmap(
-        z=z, x=tickers, y=tickers,
-        colorscale=cscale, zmin=0, zmax=1,
-        text=text, texttemplate="%{text}",
-        textfont=dict(size=10, family="DM Mono"),
-        hovertemplate="<b>%{y} × %{x}</b><br>Correlation: %{z:.2f}<extra></extra>",
-        showscale=True,
-        colorbar=dict(
-            tickfont=dict(color=p.TEXT2, size=9, family="DM Mono"),
-            outlinecolor=p.BORDER, outlinewidth=1,
-            title=dict(text="ρ", font=dict(color=p.MUTED, size=11)),
-        ),
-    ))
-    layout = T(title="Estimated Return Correlation Matrix")
-    layout["xaxis"] = dict(tickangle=-35, gridcolor=p.BORDER, side="bottom",
-                           tickfont=dict(color=p.TEXT2, family="Epilogue", size=10))
-    layout["yaxis"] = dict(gridcolor=p.BORDER, autorange="reversed",
-                           tickfont=dict(color=p.TEXT2, family="Epilogue", size=10))
-    layout["height"] = max(360, len(tickers) * 44 + 80)
-    fig.update_layout(**layout)
-    return fig, corr
-
-
-def diversification_score(corr_df):
-    """Lower average off-diagonal correlation = more diversified (0–100 score)."""
-    vals = corr_df.values
-    n    = len(vals)
-    if n <= 1:
-        return 100
-    off  = [vals[i, j] for i in range(n) for j in range(n) if i != j]
-    avg  = np.mean(off)
-    return round((1.0 - avg) * 100)
-
-
-def run_monte_carlo(m, am, years=5, n_sims=1000):
-    """
-    Geometric Brownian Motion portfolio projection.
-    Uses portfolio CAGR and cross-sectional volatility.
-    Returns array shape (n_sims, months+1).
-    """
-    cagr_pct  = m.get("cagr") or max(0.0, m["overall_roi"])
-    mu_annual = cagr_pct / 100.0
-    sigma_ann = max(0.01, am["port_vol"] / 100.0)
-
-    mu_m      = (1 + mu_annual) ** (1/12) - 1
-    sigma_m   = sigma_ann / np.sqrt(12)
-    months    = years * 12
-    V0        = m["total_value"]
-
-    rng       = np.random.default_rng(42)
-    shocks    = rng.normal(mu_m, sigma_m, (n_sims, months))
-    paths     = np.ones((n_sims, months + 1)) * V0
-    for t in range(months):
-        paths[:, t+1] = paths[:, t] * (1 + shocks[:, t])
-    paths = np.maximum(paths, 0)
-    return paths
-
-
-def chart_monte_carlo(m, am, years=5):
-    p      = th()
-    paths  = run_monte_carlo(m, am, years)
-    months = years * 12
-    x      = [i / 12 for i in range(months + 1)]
-
-    pcts   = np.percentile(paths, [5, 15, 25, 50, 75, 85, 95], axis=0)
-    labels = ["5th", "15th", "25th", "50th (median)", "75th", "85th", "95th"]
-
-    fig = go.Figure()
-
-    # Shaded bands
-    band_pairs = [(0, 6, RUBY,    0.07),
-                  (1, 5, AMBER,   0.10),
-                  (2, 4, EMERALD, 0.14)]
-    for lo, hi, clr, opacity in band_pairs:
-        fig.add_trace(go.Scatter(
-            x=x + x[::-1],
-            y=list(pcts[lo]) + list(pcts[hi])[::-1],
-            fill="toself", fillcolor=clr,
-            line=dict(width=0), opacity=opacity,
-            showlegend=False, hoverinfo="skip",
-        ))
-
-    # Percentile lines
-    line_styles = [
-        dict(color=RUBY,    width=1.5, dash="dot"),
-        dict(color=AMBER,   width=1,   dash="dot"),
-        dict(color=AMBER,   width=1,   dash="dash"),
-        dict(color=GOLD,    width=2.5),
-        dict(color=EMERALD, width=1,   dash="dash"),
-        dict(color=EMERALD, width=1,   dash="dot"),
-        dict(color=TEAL,    width=1.5, dash="dot"),
-    ]
-    for i, (lbl, ls) in enumerate(zip(labels, line_styles)):
-        fig.add_trace(go.Scatter(
-            x=x, y=pcts[i], mode="lines", name=lbl,
-            line=ls,
-            hovertemplate=f"<b>{lbl}</b><br>Year %{{x:.1f}}: GHS %{{y:,.0f}}<extra></extra>",
-        ))
-
-    # Current value reference
-    fig.add_hline(y=m["total_value"], line_color=p.MUTED, line_dash="dash", line_width=1,
-                  annotation_text=f" Current GHS {m['total_value']:,.0f}",
-                  annotation_font=dict(color=p.MUTED, size=9, family="DM Mono"))
-
-    # Ruin probability annotation
-    final = paths[:, -1]
-    ruin_pct = np.mean(final < m["total_value"]) * 100
-    fig.add_annotation(
-        xref="paper", yref="paper", x=0.98, y=0.02,
-        text=f"P(below current) = {ruin_pct:.1f}%",
-        showarrow=False, font=dict(size=10, color=RUBY, family="DM Mono"),
-        align="right", bgcolor=p.CARD2, bordercolor=p.BORDER, borderpad=6,
-    )
-
-    layout = T(title=f"Monte Carlo Projection — {years}-Year Portfolio Simulation ({1000} paths)",
-               xt="Years", yt="Portfolio Value (GHS)")
-    layout["height"] = 460
-    fig.update_layout(**layout)
-    return fig, paths
-
-
-def chart_efficient_frontier(eq, equities_val):
-    """
-    Markowitz-style efficient frontier using synthetic covariance
-    (returns = gain_pct, cov built from correlation matrix).
-    Plots frontier + current portfolio + labelled stocks.
-    """
-    p       = th()
-    if len(eq) < 3:
-        return None
-    returns = np.array([e["gain_pct"] for e in eq])
-    corr    = build_correlation_matrix(eq).values
-    # Proxy std: abs(return) * 0.4 + 5, floored at 3
-    stds    = np.maximum(3.0, np.abs(returns) * 0.4 + 5)
-    cov     = np.outer(stds, stds) * corr
-    n       = len(eq)
-
-    # Simulate random portfolios
-    rng     = np.random.default_rng(7)
-    N_SIM   = 2500
-    sim_ret, sim_vol, sim_w = [], [], []
-    for _ in range(N_SIM):
-        w = rng.dirichlet(np.ones(n))
-        r = float(w @ returns)
-        v = float(np.sqrt(w @ cov @ w))
-        sim_ret.append(r)
-        sim_vol.append(v)
-        sim_w.append(w)
-
-    # Current portfolio point
-    w_curr  = np.array([e["market_value"] / equities_val for e in eq]) if equities_val else np.ones(n)/n
-    r_curr  = float(w_curr @ returns)
-    v_curr  = float(np.sqrt(w_curr @ cov @ w_curr))
-
-    # Equal-weight point
-    w_eq    = np.ones(n) / n
-    r_eq    = float(w_eq @ returns)
-    v_eq    = float(np.sqrt(w_eq @ cov @ w_eq))
-
-    # Min-variance frontier
-    sim_arr  = np.array(list(zip(sim_vol, sim_ret)))
-    rf       = 18.0
-    sharpes  = [(r - rf) / v if v > 0 else -99 for r, v in zip(sim_ret, sim_vol)]
-    best_idx = int(np.argmax(sharpes))
-
-    fig = go.Figure()
-
-    # Scatter of random portfolios coloured by Sharpe
-    fig.add_trace(go.Scatter(
-        x=sim_vol, y=sim_ret, mode="markers",
-        marker=dict(
-            size=4, opacity=0.4,
-            color=sharpes,
-            colorscale=[[0, RUBY], [0.5, AMBER], [1, EMERALD]],
-            showscale=True,
-            colorbar=dict(title=dict(text="Sharpe", font=dict(color=p.MUTED, size=9)),
-                          tickfont=dict(color=p.TEXT2, size=8, family="DM Mono"),
-                          outlinecolor=p.BORDER, outlinewidth=1,
-                          len=0.6),
-        ),
-        hovertemplate="Vol: %{x:.1f}%<br>Return: %{y:.1f}%<extra>Random Portfolio</extra>",
-        name="Simulated portfolios",
-    ))
-
-    # Max-Sharpe portfolio
-    fig.add_trace(go.Scatter(
-        x=[sim_vol[best_idx]], y=[sim_ret[best_idx]],
-        mode="markers+text", name="Max Sharpe",
-        marker=dict(size=16, color=GOLD, symbol="star",
-                    line=dict(color=p.BG, width=2)),
-        text=["Max Sharpe"], textposition="top center",
-        textfont=dict(color=GOLD, size=10, family="Epilogue"),
-        hovertemplate=f"Max Sharpe<br>Vol: {sim_vol[best_idx]:.1f}%<br>Return: {sim_ret[best_idx]:.1f}%<extra></extra>",
-    ))
-
-    # Current portfolio
-    fig.add_trace(go.Scatter(
-        x=[v_curr], y=[r_curr],
-        mode="markers+text", name="Your Portfolio",
-        marker=dict(size=18, color=VIOLET, symbol="diamond",
-                    line=dict(color=p.BG, width=2)),
-        text=["You"], textposition="top center",
-        textfont=dict(color=VIOLET, size=11, family="Epilogue"),
-        hovertemplate=f"Your Portfolio<br>Vol: {v_curr:.1f}%<br>Return: {r_curr:.1f}%<extra></extra>",
-    ))
-
-    # Equal-weight
-    fig.add_trace(go.Scatter(
-        x=[v_eq], y=[r_eq],
-        mode="markers+text", name="Equal Weight",
-        marker=dict(size=14, color=AZURE, symbol="circle",
-                    line=dict(color=p.BG, width=2)),
-        text=["Equal Wt"], textposition="bottom right",
-        textfont=dict(color=AZURE, size=9, family="Epilogue"),
-        hovertemplate=f"Equal Weight<br>Vol: {v_eq:.1f}%<br>Return: {r_eq:.1f}%<extra></extra>",
-    ))
-
-    # Individual stocks
-    for e, s in zip(eq, stds):
-        fig.add_trace(go.Scatter(
-            x=[s], y=[e["gain_pct"]],
-            mode="markers+text", showlegend=False,
-            marker=dict(size=8, color=SECTOR_COLORS.get(e["sector"], SLATE),
-                        opacity=0.7, line=dict(color=p.BG, width=1)),
-            text=[e["ticker"]], textposition="middle right",
-            textfont=dict(size=8, color=p.TEXT2, family="Epilogue"),
-            hovertemplate=f"<b>{e['ticker']}</b><br>Est. Vol: {s:.1f}%<br>Return: {e['gain_pct']:+.1f}%<extra></extra>",
-        ))
-
-    layout = T(title="Portfolio Efficient Frontier — 2 500 random weight simulations",
-               xt="Estimated Volatility (%)", yt="Return (%)")
-    layout["height"] = 500
-    fig.update_layout(**layout)
-    return fig, sim_vol[best_idx], sim_ret[best_idx], sim_w[best_idx]
-
-
-def chart_real_vs_nominal(eq, inflation_pct):
-    """Bar chart comparing nominal return vs real (inflation-adjusted) return per stock."""
-    p       = th()
-    df      = pd.DataFrame(eq).copy()
-    infl    = inflation_pct / 100.0
-    df["real_return"] = ((1 + df["gain_pct"]/100) / (1 + infl) - 1) * 100
-    df = df.sort_values("gain_pct")
-
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name="Nominal Return", x=df["ticker"], y=df["gain_pct"],
-        marker_color=AZURE, opacity=0.8,
-        text=[f"{v:+.1f}%" for v in df["gain_pct"]], textposition="outside",
-        textfont=dict(size=9, family="DM Mono"),
-    ))
-    fig.add_trace(go.Bar(
-        name=f"Real Return (adj. {inflation_pct:.0f}% CPI)", x=df["ticker"], y=df["real_return"],
-        marker_color=[EMERALD if v >= 0 else RUBY for v in df["real_return"]], opacity=0.85,
-        text=[f"{v:+.1f}%" for v in df["real_return"]], textposition="outside",
-        textfont=dict(size=9, family="DM Mono"),
-    ))
-    fig.add_hline(y=0, line_color=p.MUTED, line_dash="dash", line_width=1)
-    fig.add_hline(y=inflation_pct, line_color=AMBER, line_dash="dot", line_width=1.5,
-                  annotation_text=f" Inflation hurdle ({inflation_pct:.0f}%)",
-                  annotation_font=dict(color=AMBER, size=9, family="DM Mono"))
-    layout = T(title=f"Nominal vs Real Returns (Ghana CPI: {inflation_pct:.1f}%)", yt="Return (%)")
-    layout["barmode"]= "group"
-    layout["height"] = 380
-    fig.update_layout(**layout)
-    return fig
-
-
-def compute_tax_estimates(eq, txs):
-    """
-    Ghana tax estimates:
-    - Capital Gains Tax: 15% on net realised gains (Sell transactions at profit)
-    - Dividend Withholding Tax: 8% on gross dividends (often already withheld)
-    - Stamp Duty: 0.5% on share purchases
-    """
-    results = []
-
-    # Stamp duty from Buy transactions
-    buy_total = sum(t["debit"] for t in txs if t["type"] == "Buy")
-    stamp_duty = buy_total * 0.005
-
-    # Dividend WHT
-    div_gross  = sum(t["credit"] for t in txs if t["type"] == "Dividend")
-    div_wht    = div_gross * 0.08
-
-    # CGT on sell proceeds vs cost basis
-    sell_total = sum(t["credit"] for t in txs if t["type"] == "Sell")
-    buy_est    = sum(t["debit"]  for t in txs if t["type"] == "Buy")
-    realised_gain = max(0, sell_total - buy_est * (sell_total / buy_est if buy_est else 0))
-    cgt = realised_gain * 0.15
-
-    # Unrealised CGT liability (if all positions were sold today)
-    unrealised_gain = sum(e["gain_loss"] for e in eq if e["gain_loss"] > 0)
-    cgt_unrealised  = unrealised_gain * 0.15
-
-    rows = [
-        ("Stamp Duty on Purchases",  "0.5% of buy value",     buy_total,        stamp_duty,       "Paid on execution"),
-        ("Dividend Withholding Tax", "8% of gross dividends", div_gross,         div_wht,          "Usually withheld at source"),
-        ("Capital Gains Tax (Est.)", "15% on realised gains", realised_gain,     cgt,              "Payable on disposal"),
-        ("CGT Liability (Unrealised)","15% if sold today",    unrealised_gain,   cgt_unrealised,   "Contingent / not yet due"),
-    ]
-    df = pd.DataFrame(rows, columns=["Tax Type","Rate","Taxable Base (GHS)","Estimated Tax (GHS)","Notes"])
-    df["Taxable Base (GHS)"] = df["Taxable Base (GHS)"].apply(lambda v: f"GHS {v:,.2f}")
-    df["Estimated Tax (GHS)"]= df["Estimated Tax (GHS)"].apply(lambda v: f"GHS {v:,.2f}")
-    total_known = stamp_duty + div_wht + cgt
-    return df, stamp_duty, div_wht, cgt, cgt_unrealised, total_known
-
-
-def goal_planner_data(current_value, monthly_contrib, annual_return_pct, years):
-    """
-    Project future portfolio value given monthly contributions and return.
-    Returns arrays of month index and portfolio value.
-    """
-    r = (1 + annual_return_pct/100) ** (1/12) - 1
-    months = years * 12
-    vals   = [current_value]
-    for _ in range(months):
-        vals.append(vals[-1] * (1 + r) + monthly_contrib)
-    return vals
-
-
-def chart_goal_projection(current_value, monthly_contrib, annual_return_pct, years,
-                          target_value=None, inflation_pct=0):
-    p   = th()
-    nominal = goal_planner_data(current_value, monthly_contrib, annual_return_pct, years)
-    real_r  = ((1 + annual_return_pct/100) / (1 + inflation_pct/100) - 1) * 100
-    real    = goal_planner_data(current_value, monthly_contrib, real_r, years)
-    x       = [i/12 for i in range(len(nominal))]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x, y=nominal, mode="lines", name="Nominal Value",
-        line=dict(color=GOLD, width=2.5),
-        fill="tozeroy", fillcolor=f"rgba(232,180,56,0.07)",
-        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>Nominal</extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=x, y=real, mode="lines", name=f"Real Value ({inflation_pct:.0f}% CPI adj.)",
-        line=dict(color=TEAL, width=1.8, dash="dash"),
-        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>Real</extra>",
-    ))
-    if target_value:
-        fig.add_hline(y=target_value, line_color=EMERALD, line_dash="dot", line_width=2,
-                      annotation_text=f" Target GHS {target_value:,.0f}",
-                      annotation_font=dict(color=EMERALD, size=10, family="DM Mono"))
-        # Find when we hit target
-        for i, v in enumerate(nominal):
-            if v >= target_value:
-                yr = i / 12
-                fig.add_vline(x=yr, line_color=EMERALD, line_dash="dash", line_width=1,
-                              annotation_text=f" {yr:.1f}y",
-                              annotation_font=dict(color=EMERALD, size=9, family="DM Mono"))
-                break
-    fig.add_hline(y=current_value, line_color=p.MUTED, line_dash="dash", line_width=1,
-                  annotation_text=f" Current GHS {current_value:,.0f}",
-                  annotation_font=dict(color=p.MUTED, size=9, family="DM Mono"))
-    layout = T(title="Portfolio Projection", xt="Years", yt="Value (GHS)")
-    layout["height"] = 380
-    fig.update_layout(**layout)
-    return fig
-
-
-def chart_drip(eq, m, years=10, div_growth_pct=5.0):
-    """DRIP: compare portfolio growth with vs without dividend reinvestment."""
-    p           = th()
-    div_income  = m["dividend_income"]
-    port_val    = m["equities_val"] if m["equities_val"] else m["total_value"]
-    div_yield   = div_income / port_val if port_val else 0
-    cagr        = (m.get("cagr") or m["overall_roi"]) / 100
-    months      = years * 12
-    r_m         = (1 + cagr) ** (1/12) - 1
-    dg_m        = (1 + div_growth_pct/100) ** (1/12) - 1
-
-    no_drip, drip = [port_val], [port_val]
-    monthly_div = div_income / 12
-
-    for t in range(months):
-        # No DRIP: dividends paid out, not reinvested
-        no_drip.append(no_drip[-1] * (1 + r_m))
-        # DRIP: dividends reinvested each month
-        current_monthly_div = monthly_div * ((1 + dg_m) ** t)
-        drip.append(drip[-1] * (1 + r_m) + current_monthly_div)
-
-    x = [i/12 for i in range(months + 1)]
-    drip_bonus = drip[-1] - no_drip[-1]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=x, y=no_drip, mode="lines", name="Without DRIP",
-        line=dict(color=VIOLET, width=2),
-        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>No DRIP</extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=x, y=drip, mode="lines", name="With DRIP",
-        line=dict(color=EMERALD, width=2.5),
-        fill="tonexty", fillcolor="rgba(0,212,133,0.08)",
-        hovertemplate="Year %{x:.1f}<br>GHS %{y:,.0f}<extra>DRIP</extra>",
-    ))
-    fig.add_annotation(
-        xref="paper", yref="paper", x=0.98, y=0.92,
-        text=f"DRIP bonus after {years}y<br><b style='font-size:14px'>GHS {drip_bonus:,.0f}</b>",
-        showarrow=False, font=dict(size=10, color=EMERALD, family="DM Mono"),
-        align="right", bgcolor=p.CARD2, bordercolor=EMERALD+"55", borderpad=8,
-    )
-    layout = T(title=f"Dividend Reinvestment (DRIP) vs No Reinvestment — {years}-year projection",
-               xt="Years", yt="Portfolio Value (GHS)")
-    layout["height"] = 340
-    fig.update_layout(**layout)
-    return fig, drip_bonus
-
-
 def main():
     apply_theme()
     render_sidebar()
     p = th()
 
-    cl, ct, cr = st.columns([1, 7, 2])
+    if "statements" not in st.session_state:
+        st.session_state["statements"] = []
+
+    cl, ct, _ = st.columns([1, 7, 2])
     with cl:
-        st.markdown(
-            f"<div style='font-size:3.2rem;padding-top:4px;line-height:1;"
-            f"filter:drop-shadow(0 0 24px {GOLD}60);'>₵</div>",
-            unsafe_allow_html=True)
+        st.markdown(f"<div style='font-size:3.2rem;padding-top:4px;line-height:1;"
+                    f"filter:drop-shadow(0 0 24px {GOLD}60);'>₵</div>",
+                    unsafe_allow_html=True)
     with ct:
-        st.markdown(
-            f"<div class='hero-badge'>IC Securities · Ghana Stock Exchange</div>"
-            f"<div class='hero'>IC Portfolio Analyser</div>"
-            f"<div class='hero-sub'>"
-            f"Upload your statement · Live GSE prices · Analytics · Health score · Sector risk"
-            f"</div>",
-            unsafe_allow_html=True)
+        st.markdown(f"<div class='hero-badge'>IC Securities · Ghana Stock Exchange</div>"
+                    f"<div class='hero'>IC Portfolio Analyser</div>"
+                    f"<div class='hero-sub'>"
+                    f"Upload one or many statements · Live GSE prices · Real returns · "
+                    f"Fees · DRIP · Goals · Timeline"
+                    f"</div>", unsafe_allow_html=True)
 
-    uploaded = st.file_uploader("**📄 Drop your IC Securities Account Statement (PDF)**",
-                                type=["pdf"])
-    if uploaded is not None:
-        new_bytes = uploaded.read()
-        if st.session_state.get("pdf_name") != uploaded.name or "pdf_data" not in st.session_state:
-            with st.spinner("📄 Parsing statement…"):
-                st.session_state["pdf_data"] = parse_pdf(new_bytes)
-                st.session_state["pdf_name"] = uploaded.name
+    # ── Multi-file upload ─────────────────────────────────────────────────────
+    uploaded_files = st.file_uploader(
+        "**📄 Upload one or multiple IC Securities Statements (PDF)**",
+        type=["pdf"], accept_multiple_files=True)
 
-    if "pdf_data" not in st.session_state:
+    if uploaded_files:
+        existing_names = {s["_filename"] for s in st.session_state["statements"]}
+        new_count = 0
+        for f in uploaded_files:
+            if f.name not in existing_names:
+                with st.spinner(f"Parsing {f.name}…"):
+                    parsed = parse_pdf(f.read())
+                    parsed["_filename"] = f.name
+                    st.session_state["statements"].append(parsed)
+                    new_count += 1
+        if new_count:
+            st.success(f"✅ Loaded {new_count} new statement(s). Total: {len(st.session_state['statements'])}")
+
+    statements = st.session_state["statements"]
+
+    if not statements:
         st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
-        cols = st.columns(6)
+        cols = st.columns(4)
         features = [
-            ("📊","Overview & KPIs",  "Value, ROI, CAGR, Health Score & Smart Alerts."),
-            ("📈","Performance",       "Attribution, P&L waterfall, sector charts."),
-            ("🔬","Analytics",         "Sharpe, MaxDD, ENP, Risk/Return Matrix."),
-            ("⚖️","Risk & Scenarios",  "HHI, break-even analysis, What-If simulator."),
-            ("💸","Cash Flow",         "Monthly flows, dividends, heatmap."),
-            ("📋","Holdings",          "Position detail, sizer, CSV export."),
+            ("📊","Overview & Alerts","ROI, CAGR, Health Score, smart alerts, real returns vs Ghana CPI."),
+            ("📈","Performance","Attribution, waterfall, sector charts, efficiency, live prices."),
+            ("🔬","Analytics","Sharpe, MaxDD, ENP, Risk/Return matrix, goals & projection engine."),
+            ("⚖️","Risk & Scenarios","HHI, break-even, rebalance recommendations, What-If simulator."),
+        ]
+        cols2 = st.columns(4)
+        features2 = [
+            ("💸","Cash Flow","Monthly flows, dividend timeline, DRIP simulator, fee analysis."),
+            ("📋","Holdings","Position table, sizer, sector filters, CSV export."),
+            ("🕰️","Timeline","Multi-statement portfolio evolution, statement diff view."),
+            ("📄","Report","Download a full HTML report styled for printing as PDF."),
         ]
         for col, (icon, title, desc) in zip(cols, features):
             with col:
-                st.markdown(
-                    f"<div class='land-card'><span class='land-icon'>{icon}</span>"
-                    f"<div class='land-title'>{title}</div>"
-                    f"<div class='land-desc'>{desc}</div></div>",
-                    unsafe_allow_html=True)
+                st.markdown(f"<div class='land-card'><span class='land-icon'>{icon}</span>"
+                            f"<div class='land-title'>{title}</div>"
+                            f"<div class='land-desc'>{desc}</div></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        for col, (icon, title, desc) in zip(cols2, features2):
+            with col:
+                st.markdown(f"<div class='land-card'><span class='land-icon'>{icon}</span>"
+                            f"<div class='land-title'>{title}</div>"
+                            f"<div class='land-desc'>{desc}</div></div>", unsafe_allow_html=True)
         st.stop()
 
-    data = st.session_state["pdf_data"]
-    eq   = data["equities"]
-    txs  = data["transactions"]
-    ps   = data["portfolio_summary"]
+    # ── Use most recent statement as primary ──────────────────────────────────
+    def sort_key(s):
+        try:    return datetime.strptime(s["report_date"], "%d/%m/%Y")
+        except:
+            try: return datetime.strptime(s["report_date"], "%B %d, %Y")
+            except: return datetime.min
+    statements_sorted = sorted(statements, key=sort_key)
+    data = statements_sorted[-1]   # most recent
 
-    if uploaded is None:
-        st.info(f"📄 Using loaded statement: **{st.session_state.get('pdf_name', 'unknown')}** "
-                f"— upload a new file above to switch.", icon="📋")
+    st.info(f"📄 Primary statement: **{data['_filename']}** "
+            f"({data['report_date']}) — {len(statements)} total loaded",
+            icon="📋")
+
+    eq  = data["equities"]
+    txs = data["transactions"]
+    ps  = data["portfolio_summary"]
 
     if not eq:
-        st.error("Could not parse equity data from this PDF. Please check the document format.")
-        st.session_state.pop("pdf_data", None)
-        st.session_state.pop("pdf_name", None)
+        st.error("Could not parse equity data. Check the PDF format.")
+        st.session_state["statements"] = []
         st.stop()
 
+    # ── Live prices ───────────────────────────────────────────────────────────
     tickers = tuple(e["ticker"] for e in eq)
     live    = get_live_prices(tickers)
     eq      = inject_live_prices(eq, live)
     n_live  = sum(1 for e in eq if e["live_price"] is not None)
 
     if   n_live == len(eq): st.success(f"📡 All {n_live} live prices loaded from GSE-API")
-    elif n_live:             st.warning(f"📡 {n_live}/{len(eq)} live prices · statement price used for the rest")
+    elif n_live:             st.warning(f"📡 {n_live}/{len(eq)} live prices · statement price used for rest")
     else:                    st.info("📋 Showing statement prices (GSE-API unavailable)")
 
     with st.expander("✏️ Override prices manually", expanded=False):
-        ov_cols   = st.columns(5)
-        overrides = {}
+        ov_cols = st.columns(5); overrides = {}
         for i, e in enumerate(eq):
-            default = float(e["live_price"] or e["statement_price"])
-            val = ov_cols[i % 5].number_input(
-                e["ticker"], min_value=0.0, value=default,
+            val = ov_cols[i%5].number_input(e["ticker"], min_value=0.0,
+                value=float(e["live_price"] or e["statement_price"]),
                 step=0.01, format="%.4f", key=f"ov_{e['ticker']}")
-            if val > 0:
-                overrides[e["ticker"]] = val
+            if val > 0: overrides[e["ticker"]] = val
         if st.button("✅ Apply prices", type="primary"):
-            st.cache_data.clear()
-            eq = inject_live_prices(
-                eq, {t: {"price": pv, "change_pct":0, "change_abs":0}
-                     for t, pv in overrides.items()})
-            n_live = len(eq)
-            st.success("Applied.")
+            eq = inject_live_prices(eq, {t:{"price":pv,"change_pct":0,"change_abs":0}
+                                         for t,pv in overrides.items()})
+            n_live = len(eq); st.success("Applied.")
 
-    m  = compute_metrics(eq, txs, ps)
-    am = compute_advanced_metrics(eq, txs, m)
+    # ── Compute ───────────────────────────────────────────────────────────────
+    m   = compute_metrics(eq, txs, ps)
+    am  = compute_advanced(eq, txs, m)
+    fee_rows, total_fees = compute_fees(txs)
+    drip_rows, drip_value = simulate_drip(eq, txs, m)
 
-    pp_cls = "live" if n_live == len(eq) else "warn" if n_live else "info"
-    pp_txt = ("✦ All Live" if n_live == len(eq)
-              else f"{n_live}/{len(eq)} Live" if n_live else "Statement")
-    roi_c  = EMERALD if m["overall_roi"] >= 0 else RUBY
-    gl_c   = EMERALD if m["total_gain"]  >= 0 else RUBY
-    cagr_s = (f"<span style='color:{EMERALD if (m['cagr'] or 0) >= 0 else RUBY}'>"
-              f"{m['cagr']:+.2f}%</span>" if m["cagr"] is not None else "—")
+    # ── Client bar ────────────────────────────────────────────────────────────
+    roi_c = EMERALD if m["roi"]>=0 else RUBY
+    gl_c  = EMERALD if m["tg"]>=0  else RUBY
+    cagr_s = (f"<span style='color:{EMERALD if (m['cagr'] or 0)>=0 else RUBY}'>"
+              f"{m['cagr']:+.2f}%</span>" if m["cagr"] else "—")
+    pp_cls = "live" if n_live==len(eq) else "warn" if n_live else "info"
+    pp_txt = "✦ All Live" if n_live==len(eq) else f"{n_live}/{len(eq)} Live" if n_live else "Statement"
+
+    # Real return for cbar
+    rr_str = "—"
+    if m["cagr"] and m["years"] >= 0.5:
+        rr = real_return(m["cagr"], m["years"])
+        if rr:
+            rr_col = EMERALD if rr[0] >= 0 else RUBY
+            rr_str = f"<span style='color:{rr_col}'>{rr[0]:+.2f}%</span>"
+
     st.markdown(f"""
 <div class='cbar'>
   <div class='cbar-item'><div class='cbar-lbl'>Client</div>
@@ -1840,900 +1507,684 @@ def main():
   <div class='cbar-item'><div class='cbar-lbl'>Statement Date</div>
     <div class='cbar-val'>{data['report_date']}</div></div>
   <div class='cbar-item'><div class='cbar-lbl'>Portfolio Value</div>
-    <div class='cbar-val'>GHS {m['total_value']:,.2f}</div></div>
+    <div class='cbar-val'>GHS {m['tv']:,.2f}</div></div>
   <div class='cbar-item'><div class='cbar-lbl'>ROI (net cash)</div>
-    <div class='cbar-val' style='color:{roi_c}'>{m['overall_roi']:+.2f}%</div></div>
-  <div class='cbar-item'><div class='cbar-lbl'>CAGR</div>
-    <div class='cbar-val'>{cagr_s}</div></div>
+    <div class='cbar-val' style='color:{roi_c}'>{m['roi']:+.2f}%</div></div>
+  <div class='cbar-item'><div class='cbar-lbl'>CAGR / Real CAGR</div>
+    <div class='cbar-val'>{cagr_s} / {rr_str}</div></div>
   <div class='cbar-item'><div class='cbar-lbl'>Unrealised G/L</div>
-    <div class='cbar-val' style='color:{gl_c}'>{'+'if m['total_gain']>=0 else ''}GHS {m['total_gain']:,.2f}</div></div>
+    <div class='cbar-val' style='color:{gl_c}'>{'+'if m['tg']>=0 else ''}GHS {m['tg']:,.2f}</div></div>
   <div class='cbar-item'><div class='cbar-lbl'>Win Rate</div>
     <div class='cbar-val'>{m['winners']}/{len(eq)} ({m['winners']/len(eq)*100:.0f}%)</div></div>
   <div class='cbar-item'><div class='cbar-lbl'>Prices</div>
     <div class='cbar-val'><span class='pill {pp_cls}'>{pp_txt}</span></div></div>
 </div>""", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-        "📊 Overview", "📈 Performance", "🔬 Analytics",
-        "🎲 Projections", "🧮 Deep Analysis",
-        "⚖️ Risk & Scenarios", "💸 Cash Flow", "📋 Holdings",
+    # ── TABS ──────────────────────────────────────────────────────────────────
+    tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8 = st.tabs([
+        "📊 Overview","📈 Performance","🔬 Analytics",
+        "⚖️ Risk & Scenarios","💸 Cash Flow","📋 Holdings",
+        "🕰️ Timeline","📄 Report",
     ])
 
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB 1 — OVERVIEW
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
     with tab1:
         shdr("Portfolio Summary")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.markdown(kpi("Total Portfolio Value", f"GHS {m['total_value']:,.2f}",
-                f"As of {data['report_date']}", "b"), unsafe_allow_html=True)
-        with c2:
-            st.markdown(kpi("Unrealised Gain / Loss",
-                f"<span class='{pn(m['total_gain'])}'>{'+'if m['total_gain']>=0 else ''}GHS {m['total_gain']:,.2f}</span>",
-                f"on GHS {m['total_cost']:,.2f} cost basis",
-                "g" if m["total_gain"] >= 0 else "r", delta=m["gain_pct"]), unsafe_allow_html=True)
-        with c3:
-            st.markdown(kpi("Overall ROI",
-                f"<span class='{pn(m['overall_roi'])}'>{m['overall_roi']:+.2f}%</span>",
-                f"vs GHS {m['net_invested']:,.2f} net invested",
-                "g" if m["overall_roi"] >= 0 else "r", icon="📐"), unsafe_allow_html=True)
+        c1,c2,c3,c4 = st.columns(4)
+        with c1: st.markdown(kpi("Total Portfolio Value",f"GHS {m['tv']:,.2f}",
+            f"As of {data['report_date']}","b"),unsafe_allow_html=True)
+        with c2: st.markdown(kpi("Unrealised Gain / Loss",
+            f"<span class='{pn(m['tg'])}'>{'+'if m['tg']>=0 else ''}GHS {m['tg']:,.2f}</span>",
+            f"on GHS {m['tc']:,.2f} cost basis","g" if m['tg']>=0 else "r",delta=m['gp']),unsafe_allow_html=True)
+        with c3: st.markdown(kpi("Overall ROI",
+            f"<span class='{pn(m['roi'])}'>{m['roi']:+.2f}%</span>",
+            f"vs GHS {m['ni']:,.2f} net invested","g" if m['roi']>=0 else "r",icon="📐"),unsafe_allow_html=True)
         with c4:
-            cd   = f"<span class='{pn(m['cagr'] or 0)}'>{m['cagr']:+.2f}%</span>" if m["cagr"] else "—"
-            csub = "Annualised return" if m["cagr"] else "Insufficient history"
-            st.markdown(kpi("CAGR", cd, csub,
-                "t" if (m["cagr"] or 0) >= 0 else "r", icon="📅"), unsafe_allow_html=True)
+            cd = f"<span class='{pn(m['cagr'] or 0)}'>{m['cagr']:+.2f}%</span>" if m["cagr"] else "—"
+            st.markdown(kpi("CAGR","Annualised return" and cd,
+                "Annualised return" if m["cagr"] else "Insufficient history",
+                "t" if (m["cagr"] or 0)>=0 else "r",icon="📅"),unsafe_allow_html=True)
 
         st.markdown("")
-        c5, c6, c7, c8 = st.columns(4)
+        c5,c6,c7,c8 = st.columns(4)
         with c5:
-            hc = EMERALD if m["health_score"] >= 75 else AMBER if m["health_score"] >= 50 else RUBY
+            hc=EMERALD if m['hs']>=75 else AMBER if m['hs']>=50 else RUBY
             st.markdown(kpi("Health Score",
-                f"<span style='color:{hc}'>{m['health_score']}</span>"
-                f"<span style='font-size:.9rem;color:{p.MUTED};'>/100</span>",
-                "ROI · Win Rate · Diversification · Concentration · Sectors",
-                "t" if m["health_score"] >= 75 else "y"), unsafe_allow_html=True)
-        with c6:
-            st.markdown(kpi("Cash Balance", f"GHS {m['cash_val']:,.2f}",
-                f"{ps.get('Cash',{}).get('alloc',0):.1f}% of portfolio", "y"), unsafe_allow_html=True)
-        with c7:
-            st.markdown(kpi("Dividend Income", f"GHS {m['dividend_income']:,.2f}",
-                "Total dividends received", "pk", icon="🌸"), unsafe_allow_html=True)
-        with c8:
-            st.markdown(kpi("Winning Positions", f"{m['winners']} / {len(eq)}",
-                f"{m['winners']/len(eq)*100:.0f}% win rate",
-                "g" if m["winners"] >= len(eq)//2 else "r"), unsafe_allow_html=True)
+                f"<span style='color:{hc}'>{m['hs']}</span><span style='font-size:.9rem;color:{p.MUTED};'>/100</span>",
+                "ROI · Win Rate · Concentration · Sectors","t" if m['hs']>=75 else "y"),unsafe_allow_html=True)
+        with c6: st.markdown(kpi("Cash Balance",f"GHS {m['cv']:,.2f}",
+            f"{ps.get('Cash',{}).get('alloc',0):.1f}% of portfolio","y"),unsafe_allow_html=True)
+        with c7: st.markdown(kpi("Dividend Income",f"GHS {m['div']:,.2f}",
+            "Total dividends received","pk",icon="🌸"),unsafe_allow_html=True)
+        with c8: st.markdown(kpi("Winning Positions",f"{m['winners']} / {len(eq)}",
+            f"{m['winners']/len(eq)*100:.0f}% win rate","g" if m['winners']>=len(eq)//2 else "r"),unsafe_allow_html=True)
 
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        # Real return highlight
+        if m["cagr"] and m["years"] >= 0.5:
+            rr = real_return(m["cagr"], m["years"])
+            if rr:
+                real_val, avg_cpi = rr
+                st.markdown("")
+                rr1, rr2, rr3, rr4 = st.columns(4)
+                with rr1: st.markdown(kpi("Nominal CAGR",f"<span class='{pn(m['cagr'])}'>{m['cagr']:+.2f}%</span>",
+                    "Before inflation","y",icon="📈"),unsafe_allow_html=True)
+                with rr2: st.markdown(kpi("Ghana Avg Inflation",f"<span style='color:{RUBY}'>{avg_cpi:.1f}%</span>",
+                    f"Avg CPI over {m['years']:.1f} yrs","re",icon="🔥"),unsafe_allow_html=True)
+                with rr3: st.markdown(kpi("Real CAGR",
+                    f"<span class='{pn(real_val)}'>{real_val:+.2f}%</span>",
+                    "After Ghana inflation (Fisher)","g" if real_val>=0 else "re",icon="🌡️"),unsafe_allow_html=True)
+                with rr4:
+                    est_real_gain = m['ni']*((1+real_val/100)**m['years']-1) if m['ni']>0 else 0
+                    st.markdown(kpi("Real Wealth Created",
+                        f"<span class='{pn(est_real_gain)}'>{'+'if est_real_gain>=0 else ''}GHS {est_real_gain:,.0f}</span>",
+                        "Approx. inflation-adjusted gain","g" if est_real_gain>=0 else "re",icon="💡"),unsafe_allow_html=True)
+
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("🚨 Smart Alerts")
         for cls, title, body in generate_alerts(eq, m, txs):
             st.markdown(alert_box(title, body, cls), unsafe_allow_html=True)
 
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("Quick Insights")
-        i1, i2, i3, i4, i5, i6 = st.columns(6)
-        with i1: st.markdown(insight("🏆","Best Performer",
-            f"{m['best']['ticker']} {m['best']['gain_pct']:+.1f}%","pos"), unsafe_allow_html=True)
-        with i2: st.markdown(insight("📉","Worst Performer",
-            f"{m['worst']['ticker']} {m['worst']['gain_pct']:+.1f}%","neg"), unsafe_allow_html=True)
-        with i3: st.markdown(insight("💎","Largest Position",
-            f"{m['biggest']['ticker']} · GHS {m['biggest']['market_value']:,.0f}"), unsafe_allow_html=True)
-        with i4: st.markdown(insight("🏭","Sectors Held", f"{m['sectors_used']} active"),
-            unsafe_allow_html=True)
-        with i5: st.markdown(insight("⚡","Most Active Month", m["active_month"]),
-            unsafe_allow_html=True)
-        with i6: st.markdown(insight("📡","Live Prices", f"{n_live} / {len(eq)} fetched",
-            "pos" if n_live==len(eq) else ""), unsafe_allow_html=True)
+        i1,i2,i3,i4,i5,i6 = st.columns(6)
+        with i1: st.markdown(insight("🏆","Best Performer",f"{m['best']['ticker']} {m['best']['gain_pct']:+.1f}%","pos"),unsafe_allow_html=True)
+        with i2: st.markdown(insight("📉","Worst Performer",f"{m['worst']['ticker']} {m['worst']['gain_pct']:+.1f}%","neg"),unsafe_allow_html=True)
+        with i3: st.markdown(insight("💎","Largest Position",f"{m['biggest']['ticker']} · GHS {m['biggest']['market_value']:,.0f}"),unsafe_allow_html=True)
+        with i4: st.markdown(insight("🏭","Sectors Held",f"{m['su']} active"),unsafe_allow_html=True)
+        with i5: st.markdown(insight("🧾","Est. Fees Paid",f"GHS {total_fees:,.2f}"),unsafe_allow_html=True)
+        with i6: st.markdown(insight("🌱","DRIP Upside",f"+GHS {drip_value:,.2f}"),unsafe_allow_html=True)
 
         movers = sorted([e for e in eq if e.get("change_pct") is not None],
-                        key=lambda e: abs(e["change_pct"] or 0), reverse=True)
+                        key=lambda e:abs(e["change_pct"] or 0),reverse=True)
         if movers:
-            st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
             shdr("🚀 Today's Movers")
-            mcols = st.columns(min(len(movers), 5))
-            for i, (col, e) in enumerate(zip(mcols, movers[:5])):
+            mcols = st.columns(min(len(movers),5))
+            for i,(col,e) in enumerate(zip(mcols,movers[:5])):
                 with col:
-                    st.markdown(mover_card(
-                        e["ticker"], e["live_price"] or e["statement_price"],
-                        e["change_pct"] or 0, e["change_abs"] or 0, is_top=(i == 0),
-                    ), unsafe_allow_html=True)
+                    st.markdown(mover_card(e["ticker"],e["live_price"] or e["statement_price"],
+                        e["change_pct"] or 0,e["change_abs"] or 0,is_top=(i==0)),unsafe_allow_html=True)
 
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB 2 — PERFORMANCE
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
     with tab2:
         shdr("Performance Analysis")
-        cl, cr = st.columns([3, 2])
-        with cl: st.plotly_chart(chart_gain_loss(eq), use_container_width=True)
-        with cr: st.plotly_chart(chart_sector_donut(eq), use_container_width=True)
+        cl,cr = st.columns([3,2])
+        with cl: st.plotly_chart(chart_gain_loss(eq),use_container_width=True)
+        with cr: st.plotly_chart(chart_sector_donut(eq),use_container_width=True)
+        st.plotly_chart(chart_performance_attribution(eq,m["ev"]),use_container_width=True)
+        st.plotly_chart(chart_sector_performance(eq),use_container_width=True)
+        cl,cr = st.columns([3,2])
+        with cl: st.plotly_chart(chart_market_vs_cost(eq),use_container_width=True)
+        with cr:
+            from plotly.subplots import make_subplots as _msp
+            cmap={"Equities":VIOLET,"Cash":AZURE,"Funds":GOLD,"Fixed Income":TEAL}
+            labels,parents,values,clr=[],[],[],[]
+            for k,v in ps.items():
+                if k=="Total" or (isinstance(v,dict) and v["value"]==0): continue
+                if isinstance(v,dict):
+                    labels.append(k); parents.append(""); values.append(v["value"]); clr.append(cmap.get(k,SLATE))
+            if labels:
+                fig_tm=go.Figure(go.Treemap(labels=labels,parents=parents,values=values,
+                    marker=dict(colors=clr,line=dict(width=3,color=p.BG)),
+                    texttemplate="<b>%{label}</b><br>GHS %{value:,.0f}<br>%{percentRoot:.1%}",
+                    textfont=dict(size=12,family="Epilogue"),
+                    hovertemplate="<b>%{label}</b><br>GHS %{value:,.2f}<br>%{percentRoot:.1%}<extra></extra>"))
+                tm_layout=T(title="Asset Class Allocation")
+                tm_layout["height"]=300; tm_layout["margin"]=dict(l=8,r=8,t=48,b=8)
+                fig_tm.update_layout(**tm_layout)
+                st.plotly_chart(fig_tm,use_container_width=True)
+        st.plotly_chart(chart_portfolio_efficiency(eq),use_container_width=True)
+        st.plotly_chart(chart_pl_waterfall(eq),use_container_width=True)
+        # Price comparison
+        df_pc=pd.DataFrame(eq); df_pc=df_pc[df_pc["live_price"].notna()].copy()
+        if not df_pc.empty:
+            df_pc["pct_diff"]=(df_pc["live_price"]-df_pc["statement_price"])/df_pc["statement_price"]*100
+            fig_pc=go.Figure()
+            fig_pc.add_trace(go.Bar(name="Statement Price",x=df_pc["ticker"],y=df_pc["statement_price"],marker_color=AMBER,opacity=0.8))
+            fig_pc.add_trace(go.Bar(name="Live Price",x=df_pc["ticker"],y=df_pc["live_price"],marker_color=EMERALD,opacity=0.9))
+            for _,row in df_pc.iterrows():
+                c=EMERALD if row["pct_diff"]>=0 else RUBY
+                fig_pc.add_annotation(x=row["ticker"],y=max(row["statement_price"],row["live_price"]),
+                    text=f"{row['pct_diff']:+.1f}%",showarrow=False,yshift=12,
+                    font=dict(color=c,size=9,family="DM Mono"))
+            fig_pc.update_layout(**T(title="Statement vs Live Price",yt="GHS per Share"),barmode="group",height=320)
+            st.plotly_chart(fig_pc,use_container_width=True)
+        # Sector table
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("Sector Breakdown")
+        sec_rows=[]
+        for sector,grp in pd.DataFrame(eq).groupby("sector"):
+            smv=grp["market_value"].sum(); stc=grp["total_cost"].sum(); sgl=grp["gain_loss"].sum()
+            sec_rows.append({"Sector":sector,"Stocks":", ".join(grp["ticker"].tolist()),
+                "# Stocks":len(grp),"Market Value":f"GHS {smv:,.2f}","Cost Basis":f"GHS {stc:,.2f}",
+                "Gain/Loss":f"{'+'if sgl>=0 else ''}GHS {sgl:,.2f}",
+                "Sector Return":f"{(sgl/stc*100 if stc else 0):+.1f}%",
+                "Portfolio Weight":f"{(smv/m['ev']*100 if m['ev'] else 0):.1f}%"})
+        st.dataframe(pd.DataFrame(sec_rows),use_container_width=True,hide_index=True)
 
-        st.plotly_chart(chart_performance_attribution(eq, m["equities_val"]),
-                        use_container_width=True)
-        st.plotly_chart(chart_sector_performance(eq), use_container_width=True)
-
-        cl, cr = st.columns([3, 2])
-        with cl: st.plotly_chart(chart_market_vs_cost(eq), use_container_width=True)
-        with cr: st.plotly_chart(chart_allocation_treemap(ps), use_container_width=True)
-
-        st.plotly_chart(chart_portfolio_efficiency(eq), use_container_width=True)
-        st.plotly_chart(chart_pl_waterfall(eq), use_container_width=True)
-
-        pc = chart_price_comparison(eq)
-        if pc:
-            st.plotly_chart(pc, use_container_width=True)
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        shdr("Sector Breakdown Table")
-        sec_rows = []
-        for sector, grp in pd.DataFrame(eq).groupby("sector"):
-            smv = grp["market_value"].sum()
-            stc = grp["total_cost"].sum()
-            sgl = grp["gain_loss"].sum()
-            sec_rows.append({
-                "Sector":           sector,
-                "Stocks":           ", ".join(grp["ticker"].tolist()),
-                "# Stocks":         len(grp),
-                "Market Value":     f"GHS {smv:,.2f}",
-                "Cost Basis":       f"GHS {stc:,.2f}",
-                "Gain/Loss":        f"{'+'if sgl>=0 else ''}GHS {sgl:,.2f}",
-                "Sector Return":    f"{(sgl/stc*100 if stc else 0):+.1f}%",
-                "Portfolio Weight": f"{(smv/m['equities_val']*100 if m['equities_val'] else 0):.1f}%",
-            })
-        st.dataframe(pd.DataFrame(sec_rows), use_container_width=True, hide_index=True)
-
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
     # TAB 3 — ANALYTICS
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
     with tab3:
-        shdr("Advanced Analytics",
-             f"Risk-free rate: {am['rf_rate']:.0f}% (Ghana 91-day T-bill, approx.)")
-
-        a1, a2, a3, a4, a5 = st.columns(5)
+        shdr("Advanced Analytics",f"Risk-free rate: {am['rf']:.0f}% (Ghana 91-day T-bill, approx.)")
+        a1,a2,a3,a4,a5=st.columns(5)
         with a1:
             if am["sharpe"] is not None:
-                sc   = EMERALD if am["sharpe"] >= 1 else AMBER if am["sharpe"] >= 0 else RUBY
-                sval = f"<span style='color:{sc}'>{am['sharpe']:+.2f}</span>"
-                ssub = ("Excellent" if am["sharpe"] >= 2 else
-                        "Good"      if am["sharpe"] >= 1 else
-                        "Below RF"  if am["sharpe"] < 0  else "Adequate")
-            else:
-                sval, ssub = "—", "Insufficient data"
-            st.markdown(kpi("Sharpe Ratio (approx)", sval,
-                f"Risk-adj. return · {ssub}",
-                "g" if (am["sharpe"] or 0) >= 1 else "y" if (am["sharpe"] or 0) >= 0 else "r",
-                icon="⚡"), unsafe_allow_html=True)
-        with a2:
-            mdc = AMBER if am["max_dd"] > -15 else RUBY
-            st.markdown(kpi("Max Drawdown",
-                f"<span style='color:{mdc}'>{am['max_dd']:.2f}%</span>",
-                "From cumulative flow peak", "r", icon="📉"), unsafe_allow_html=True)
-        with a3:
-            st.markdown(kpi("Effective Positions", f"{am['enp']:.1f}",
-                f"ENP = 1/HHI · of {len(eq)} holdings", "b", icon="🎯"), unsafe_allow_html=True)
-        with a4:
-            vc = AMBER if am["port_vol"] > 20 else EMERALD
-            st.markdown(kpi("Cross-sectional Vol",
-                f"<span style='color:{vc}'>{am['port_vol']:.1f}%</span>",
-                "Return dispersion across stocks", "vi", icon="📊"), unsafe_allow_html=True)
-        with a5:
-            cc = EMERALD if am["consistency"] >= 70 else AMBER if am["consistency"] >= 50 else RUBY
-            st.markdown(kpi("Consistency Score",
-                f"<span style='color:{cc}'>{am['consistency']:.0f}%</span>",
-                "Stocks within −5% of cost", "t", icon="🎯"), unsafe_allow_html=True)
+                sc=EMERALD if am["sharpe"]>=1 else AMBER if am["sharpe"]>=0 else RUBY
+                sval=f"<span style='color:{sc}'>{am['sharpe']:+.2f}</span>"
+                ssub="Excellent" if am["sharpe"]>=2 else "Good" if am["sharpe"]>=1 else "Below RF" if am["sharpe"]<0 else "Adequate"
+            else: sval,ssub="—","Insufficient data"
+            st.markdown(kpi("Sharpe Ratio",sval,f"Risk-adj. return · {ssub}",
+                "g" if (am["sharpe"] or 0)>=1 else "y" if (am["sharpe"] or 0)>=0 else "r",icon="⚡"),unsafe_allow_html=True)
+        with a2: st.markdown(kpi("Max Drawdown",
+            f"<span style='color:{AMBER if am['max_dd']>-15 else RUBY}'>{am['max_dd']:.2f}%</span>",
+            "From cumulative flow peak","r",icon="📉"),unsafe_allow_html=True)
+        with a3: st.markdown(kpi("Effective Positions",f"{am['enp']:.1f}",
+            f"ENP=1/HHI · of {len(eq)} holdings","b",icon="🎯"),unsafe_allow_html=True)
+        with a4: st.markdown(kpi("Cross-sectional Vol",
+            f"<span style='color:{AMBER if am['vol']>20 else EMERALD}'>{am['vol']:.1f}%</span>",
+            "Return dispersion across stocks","vi",icon="📊"),unsafe_allow_html=True)
+        with a5: st.markdown(kpi("Consistency",
+            f"<span style='color:{EMERALD if am['consistency']>=70 else AMBER if am['consistency']>=50 else RUBY}'>{am['consistency']:.0f}%</span>",
+            "Stocks within −5% of cost","t",icon="🎯"),unsafe_allow_html=True)
 
-        st.markdown("")
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            dyc = EMERALD if am["div_yield_cost"] >= 3 else AMBER
-            st.markdown(kpi("Dividend Yield on Cost",
-                f"<span style='color:{dyc}'>{am['div_yield_cost']:.2f}%</span>",
-                "Div income / cost basis", "pk", icon="🌸"), unsafe_allow_html=True)
-        with b2:
-            dym = EMERALD if am["div_yield_market"] >= 3 else AMBER
-            st.markdown(kpi("Dividend Yield on MV",
-                f"<span style='color:{dym}'>{am['div_yield_market']:.2f}%</span>",
-                "Div income / market value", "t", icon="💎"), unsafe_allow_html=True)
-        with b3:
-            if am["avg_holding"] is not None:
-                ah = am["avg_holding"]
-                hp_str = (f"{ah//365}y {(ah%365)//30}m" if ah >= 365 else f"{ah//30}m {ah%30}d")
-                st.markdown(kpi("Avg Holding Period", hp_str,
-                    "Estimated from buy transactions", "b", icon="⏱️"), unsafe_allow_html=True)
-            else:
-                st.markdown(kpi("Avg Holding Period", "—",
-                    "No buy transactions detected", "b", icon="⏱️"), unsafe_allow_html=True)
+        # Real returns chart
+        rr_fig = chart_real_vs_nominal(m)
+        if rr_fig:
+            st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+            shdr("🌡️ Real Returns vs Ghana Inflation",
+                 "After ~23% avg annual inflation, many nominal gains are real losses")
+            st.plotly_chart(rr_fig,use_container_width=True)
 
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        shdr("Risk / Return Matrix",
-             "Bubble size = Market Value · Vertical line = equal weight")
-        st.plotly_chart(chart_risk_return_scatter(eq, m["equities_val"]),
-                        use_container_width=True)
+        # Risk / Return scatter
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("Risk / Return Matrix","Bubble size = Market Value")
+        st.plotly_chart(chart_risk_return_scatter(eq,m["ev"]),use_container_width=True)
 
-        dd_fig = chart_drawdown(txs, m["total_value"])
+        # Drawdown
+        dd_fig=chart_drawdown(txs,m["tv"])
         if dd_fig:
-            st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
             shdr("Portfolio Drawdown from Peak")
-            st.plotly_chart(dd_fig, use_container_width=True)
+            st.plotly_chart(dd_fig,use_container_width=True)
 
-        hm_fig = chart_monthly_cashflow_heatmap(txs)
+        # Goals & Projection
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("🎯 Goals & Wealth Projection",
+             "Based on current CAGR with optimistic (+40%) and pessimistic (−40%) bands")
+        if m["cagr"] and m["cagr"] > 0:
+            g1,g2,g3 = st.columns(3)
+            with g1: target_val = st.number_input("Target Portfolio Value (GHS)",
+                min_value=float(m["tv"]),value=float(m["tv"]*2),step=10000.0,format="%.2f")
+            with g2: yrs_max = st.slider("Projection horizon (years)",5,30,15)
+            with g3: st.markdown(kpi("Current CAGR",
+                f"<span class='{pn(m['cagr'])}'>{m['cagr']:+.2f}%</span>",
+                "This drives the base projection","t"),unsafe_allow_html=True)
+            proj_result = project_portfolio(m["tv"], m["cagr"], target_val, yrs_max)
+            if proj_result:
+                df_proj, hit_date = proj_result
+                st.plotly_chart(chart_projection(df_proj,m["tv"],target_val,hit_date),use_container_width=True)
+                if hit_date:
+                    years_to_target = (hit_date - datetime.now()).days / 365.25
+                    st.markdown(alert_box(
+                        f"Target of GHS {target_val:,.0f} reached",
+                        f"At your current CAGR of {m['cagr']:.1f}%, you reach your target in approximately "
+                        f"<b>{years_to_target:.1f} years</b> ({hit_date.strftime('%B %Y')}).",
+                        "ok"),unsafe_allow_html=True)
+                else:
+                    st.markdown(alert_box("Target Not Reached in Horizon",
+                        f"At {m['cagr']:.1f}% CAGR your portfolio does not reach GHS {target_val:,.0f} "
+                        f"within {yrs_max} years. Extend the horizon or increase your contributions.",
+                        "warn"),unsafe_allow_html=True)
+        else:
+            st.info("Insufficient CAGR data for projection. Upload more statements or ensure contribution history is present.")
+
+        # Monthly heatmap
+        hm_fig=chart_monthly_heatmap(txs)
         if hm_fig:
-            st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-            shdr("Monthly Net Cash Flow Calendar",
-                 "Green = net inflow · Red = net outflow")
-            st.plotly_chart(hm_fig, use_container_width=True)
+            st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+            shdr("Monthly Net Cash Flow Calendar")
+            st.plotly_chart(hm_fig,use_container_width=True)
 
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        # Per-stock analytics table
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("Per-Stock Analytics")
-        ana_rows = []
-        for e in sorted(eq, key=lambda x: x["market_value"], reverse=True):
-            wt  = e["market_value"] / m["equities_val"] * 100 if m["equities_val"] else 0
-            eff = e["gain_loss"] / e["total_cost"] * 100 if e["total_cost"] else 0
-            hp  = am["holding_periods"].get(e["ticker"])
-            hp_s= (f"{hp//365}y {(hp%365)//30}m" if hp and hp >= 365
-                   else f"{hp//30}m" if hp else "—")
-            ana_rows.append({
-                "Ticker":         e["ticker"],
-                "Sector":         e["sector"],
-                "Weight %":       f"{wt:.1f}%",
-                "Return %":       f"{e['gain_pct']:+.1f}%",
-                "Efficiency ROI": f"{eff:+.1f}%",
-                "Contribution":   f"{e['gain_loss']/m['equities_val']*100:+.2f}%" if m["equities_val"] else "—",
-                "Holding Period": hp_s,
-                "Status":         "✅ Profit" if e["gain_pct"] >= 0 else "🔴 Loss",
-            })
-        st.dataframe(pd.DataFrame(ana_rows), use_container_width=True, hide_index=True)
+        ana_rows=[]
+        for e in sorted(eq,key=lambda x:x["market_value"],reverse=True):
+            wt=e["market_value"]/m["ev"]*100 if m["ev"] else 0
+            eff=e["gain_loss"]/e["total_cost"]*100 if e["total_cost"] else 0
+            hp=am["holding_periods"].get(e["ticker"])
+            hp_s=f"{hp//365}y {(hp%365)//30}m" if hp and hp>=365 else f"{hp//30}m" if hp else "—"
+            ana_rows.append({"Ticker":e["ticker"],"Sector":e["sector"],
+                "Weight %":f"{wt:.1f}%","Return %":f"{e['gain_pct']:+.1f}%",
+                "Efficiency ROI":f"{eff:+.1f}%",
+                "Contribution":f"{e['gain_loss']/m['ev']*100:+.2f}%" if m["ev"] else "—",
+                "Holding Period":hp_s,"Status":"✅ Profit" if e["gain_pct"]>=0 else "🔴 Loss"})
+        st.dataframe(pd.DataFrame(ana_rows),use_container_width=True,hide_index=True)
 
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 4 — PROJECTIONS
-    # ═══════════════════════════════════════════════════════════════════════════
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 4 — RISK & SCENARIOS
+    # ══════════════════════════════════════════════════════════════════════════
     with tab4:
-        shdr("🎲 Monte Carlo Portfolio Simulation",
-             "Based on portfolio CAGR and return dispersion across holdings")
-
-        mc_col1, mc_col2, mc_col3 = st.columns(3)
-        with mc_col1:
-            mc_years = st.slider("Projection horizon (years)", 1, 15, 5, key="mc_years")
-        with mc_col2:
-            mc_cagr_override = st.number_input(
-                "Annual return assumption (%)",
-                value=float(round(m.get("cagr") or max(0.0, m["overall_roi"]), 1)),
-                min_value=-30.0, max_value=80.0, step=0.5, format="%.1f",
-                key="mc_cagr")
-        with mc_col3:
-            mc_vol_override = st.number_input(
-                "Annual volatility (%)",
-                value=float(round(am["port_vol"], 1)),
-                min_value=1.0, max_value=100.0, step=0.5, format="%.1f",
-                key="mc_vol")
-
-        # Build a temporary override metrics object
-        _m_mc = {**m, "cagr": mc_cagr_override}
-        _am_mc = {**am, "port_vol": mc_vol_override}
-        mc_fig, mc_paths = chart_monte_carlo(_m_mc, _am_mc, mc_years)
-        st.plotly_chart(mc_fig, use_container_width=True)
-
-        # Summary statistics
-        final = mc_paths[:, -1]
-        p10, p50, p90 = np.percentile(final, [10, 50, 90])
-        prob_above = np.mean(final > m["total_value"]) * 100
-        prob_2x    = np.mean(final > m["total_value"] * 2) * 100
-
-        mc1, mc2, mc3, mc4, mc5 = st.columns(5)
-        with mc1:
-            st.markdown(kpi("Median Outcome",
-                f"GHS {p50:,.0f}",
-                f"50th percentile at year {mc_years}", "g"), unsafe_allow_html=True)
-        with mc2:
-            st.markdown(kpi("Bear Case (10th %ile)",
-                f"GHS {p10:,.0f}",
-                "10% of paths end below this", "r"), unsafe_allow_html=True)
-        with mc3:
-            st.markdown(kpi("Bull Case (90th %ile)",
-                f"GHS {p90:,.0f}",
-                "10% of paths end above this", "t"), unsafe_allow_html=True)
-        with mc4:
-            c = EMERALD if prob_above >= 60 else AMBER if prob_above >= 40 else RUBY
-            st.markdown(kpi("P(Beat Current)",
-                f"<span style='color:{c}'>{prob_above:.1f}%</span>",
-                "Probability portfolio grows", "b"), unsafe_allow_html=True)
-        with mc5:
-            c2 = EMERALD if prob_2x >= 30 else AMBER
-            st.markdown(kpi("P(Double)",
-                f"<span style='color:{c2}'>{prob_2x:.1f}%</span>",
-                "Probability of 2× current value", "vi"), unsafe_allow_html=True)
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        shdr("🎯 Goal Planner",
-             "How much do you need to invest monthly to reach your target?")
-
-        g1, g2, g3, g4 = st.columns(4)
-        with g1:
-            goal_target = st.number_input("Target Portfolio Value (GHS)",
-                value=float(round(m["total_value"] * 2, -3)),
-                min_value=0.0, step=10000.0, format="%.0f", key="goal_target")
-        with g2:
-            goal_years = st.slider("Time horizon (years)", 1, 30, 10, key="goal_years")
-        with g3:
-            goal_return = st.number_input("Expected annual return (%)",
-                value=float(round(mc_cagr_override, 1)),
-                min_value=0.1, max_value=80.0, step=0.5, format="%.1f", key="goal_ret")
-        with g4:
-            goal_inflation = st.number_input("Ghana CPI / Inflation (%)",
-                value=23.0, min_value=0.0, max_value=80.0, step=0.5, format="%.1f",
-                key="goal_infl")
-
-        # Compute required monthly contribution
-        r_m     = (1 + goal_return/100) ** (1/12) - 1
-        n_m     = goal_years * 12
-        fv_curr = m["total_value"] * (1 + r_m) ** n_m   # current value compounded
-        shortfall = goal_target - fv_curr
-        if shortfall <= 0:
-            req_monthly = 0.0
-            msg = "🎉 Your current portfolio will reach that target with no additional contributions!"
-        elif r_m > 0:
-            req_monthly = shortfall * r_m / ((1 + r_m)**n_m - 1)
-            msg = ""
-        else:
-            req_monthly = shortfall / n_m
-            msg = ""
-
-        gp1, gp2, gp3, gp4 = st.columns(4)
-        with gp1:
-            st.markdown(kpi("Required Monthly Contribution",
-                f"GHS {req_monthly:,.2f}",
-                f"to reach GHS {goal_target:,.0f} in {goal_years}y", "y", icon="💳"),
-                unsafe_allow_html=True)
-        with gp2:
-            total_contrib = req_monthly * n_m
-            st.markdown(kpi("Total You'll Contribute",
-                f"GHS {total_contrib:,.0f}",
-                "cumulative over the period", "b"), unsafe_allow_html=True)
-        with gp3:
-            growth = goal_target - m["total_value"] - total_contrib
-            st.markdown(kpi("Investment Growth Component",
-                f"GHS {max(0, growth):,.0f}",
-                "returns on top of contributions", "g"), unsafe_allow_html=True)
-        with gp4:
-            real_target = goal_target / (1 + goal_inflation/100)**goal_years
-            st.markdown(kpi("Target in Today's GHS",
-                f"GHS {real_target:,.0f}",
-                f"inflation-adjusted ({goal_inflation:.0f}% CPI)", "t"), unsafe_allow_html=True)
-
-        if msg:
-            st.success(msg)
-
-        goal_fig = chart_goal_projection(
-            m["total_value"], req_monthly, goal_return, goal_years,
-            target_value=goal_target, inflation_pct=goal_inflation)
-        st.plotly_chart(goal_fig, use_container_width=True)
-
-        # DRIP section
-        if m["dividend_income"] > 0:
-            st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-            shdr("🌱 Dividend Reinvestment (DRIP) Simulator")
-            drip_c1, drip_c2 = st.columns(2)
-            with drip_c1:
-                drip_years = st.slider("DRIP horizon (years)", 1, 20, 10, key="drip_years")
-            with drip_c2:
-                drip_growth = st.slider("Dividend growth rate (% p.a.)", 0, 20, 5, key="drip_growth")
-            drip_fig, drip_bonus = chart_drip(eq, m, drip_years, drip_growth)
-            st.plotly_chart(drip_fig, use_container_width=True)
-            st.markdown(
-                alert_box("DRIP Advantage",
-                    f"Reinvesting dividends adds an estimated <b>GHS {drip_bonus:,.2f}</b> "
-                    f"to your portfolio over {drip_years} years at {drip_growth}% dividend growth rate. "
-                    f"That's pure compounding with no extra capital deployed.",
-                    "ok"), unsafe_allow_html=True)
-        else:
-            st.info("No dividend income detected in this statement — DRIP simulator will appear once dividends are recorded.")
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 5 — DEEP ANALYSIS
-    # ═══════════════════════════════════════════════════════════════════════════
-    with tab5:
-        # ── Efficient Frontier ────────────────────────────────────────────────
-        shdr("📐 Efficient Frontier",
-             "Where does your current allocation sit vs the optimal risk/return frontier?")
-        if len(eq) >= 3:
-            ef_result = chart_efficient_frontier(eq, m["equities_val"])
-            if ef_result:
-                ef_fig, ef_vol, ef_ret, ef_w = ef_result
-                st.plotly_chart(ef_fig, use_container_width=True)
-
-                # Show optimal weights
-                ef_rows = []
-                for e, w in zip(eq, ef_w):
-                    curr_w = e["market_value"] / m["equities_val"] * 100 if m["equities_val"] else 0
-                    diff   = w*100 - curr_w
-                    ef_rows.append({
-                        "Ticker":           e["ticker"],
-                        "Sector":           e["sector"],
-                        "Current Weight %": f"{curr_w:.1f}%",
-                        "Max-Sharpe Weight %": f"{w*100:.1f}%",
-                        "Δ Weight":         f"{'+'if diff>=0 else ''}{diff:.1f}%",
-                        "Action":           ("🟢 Add" if diff > 3 else "🔴 Trim" if diff < -3 else "✅ Hold"),
-                    })
-                st.caption(f"Max-Sharpe portfolio: Est. Vol {ef_vol:.1f}% · Return {ef_ret:.1f}%")
-                st.dataframe(pd.DataFrame(ef_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("Need at least 3 holdings to compute an efficient frontier.")
-
-        # ── Correlation Matrix ────────────────────────────────────────────────
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        shdr("🔗 Return Correlation Matrix",
-             "High correlation = positions are NOT diversifying you")
-        corr_fig, corr_df = chart_correlation_heatmap(eq)
-        div_score = diversification_score(corr_df)
-        div_c     = EMERALD if div_score >= 65 else AMBER if div_score >= 45 else RUBY
-        div_label = "Well Diversified" if div_score >= 65 else "Moderately Diversified" if div_score >= 45 else "Concentrated"
-
-        dc1, dc2, dc3 = st.columns(3)
-        with dc1:
-            st.markdown(kpi("Diversification Score",
-                f"<span style='color:{div_c}'>{div_score}</span>/100",
-                f"{div_label} · lower avg correlation = higher score",
-                "t" if div_score >= 65 else "y"), unsafe_allow_html=True)
-        with dc2:
-            n_high = int(sum(1 for i in range(len(eq)) for j in range(i+1,len(eq))
-                             if corr_df.values[i,j] >= 0.70))
-            st.markdown(kpi("Highly Correlated Pairs",
-                f"{n_high}",
-                "pairs with ρ ≥ 0.70 (limited diversification value)",
-                "r" if n_high > 3 else "y" if n_high > 1 else "g"), unsafe_allow_html=True)
-        with dc3:
-            n_sectors = m["sectors_used"]
-            st.markdown(kpi("Sectors in Portfolio",
-                f"{n_sectors}",
-                "more sectors = lower average correlation",
-                "g" if n_sectors >= 5 else "y" if n_sectors >= 3 else "r"), unsafe_allow_html=True)
-
-        st.plotly_chart(corr_fig, use_container_width=True)
-
-        # ── Inflation-Adjusted Returns ────────────────────────────────────────
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        shdr("📉 Real (Inflation-Adjusted) Returns",
-             "In Ghana's high-inflation environment, nominal gains can mask real losses")
-
-        infl_rate = st.slider(
-            "Ghana CPI / Inflation Rate (%)",
-            min_value=5.0, max_value=60.0, value=23.0, step=0.5,
-            format="%.1f%%", key="infl_slider")
-
-        real_fig = chart_real_vs_nominal(eq, infl_rate)
-        st.plotly_chart(real_fig, use_container_width=True)
-
-        # Portfolio-level real return summary
-        nom_port = m["gain_pct"]
-        real_port = ((1 + nom_port/100) / (1 + infl_rate/100) - 1) * 100
-        beaten_inflation = sum(1 for e in eq
-                               if ((1 + e["gain_pct"]/100) / (1 + infl_rate/100) - 1) * 100 > 0)
-        rp1, rp2, rp3 = st.columns(3)
-        with rp1:
-            rpc = EMERALD if real_port >= 0 else RUBY
-            st.markdown(kpi("Portfolio Real Return",
-                f"<span style='color:{rpc}'>{real_port:+.2f}%</span>",
-                f"Nominal {nom_port:+.2f}% − {infl_rate:.0f}% CPI",
-                "g" if real_port >= 0 else "r"), unsafe_allow_html=True)
-        with rp2:
-            st.markdown(kpi("Stocks Beating Inflation",
-                f"{beaten_inflation} / {len(eq)}",
-                f"Positive real return at {infl_rate:.0f}% CPI",
-                "g" if beaten_inflation >= len(eq)//2 else "r"), unsafe_allow_html=True)
-        with rp3:
-            real_val = m["total_value"] / (1 + infl_rate/100)
-            st.markdown(kpi("Portfolio in Today's GHS",
-                f"GHS {real_val:,.2f}",
-                "Purchasing power equivalent",
-                "t"), unsafe_allow_html=True)
-
-        # ── Ghana Tax Estimator ───────────────────────────────────────────────
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        shdr("🧾 Ghana Tax Estimator",
-             "Capital Gains Tax (15%) · Dividend WHT (8%) · Stamp Duty (0.5%)")
-
-        tax_df, stamp, div_wht, cgt, cgt_unreal, total_known = compute_tax_estimates(eq, txs)
-        st.dataframe(tax_df, use_container_width=True, hide_index=True)
-
-        t1, t2, t3, t4 = st.columns(4)
-        with t1:
-            st.markdown(kpi("Stamp Duty Paid",
-                f"GHS {stamp:,.2f}", "0.5% on share purchases", "b", icon="🏛️"),
-                unsafe_allow_html=True)
-        with t2:
-            st.markdown(kpi("Dividend WHT (Est.)",
-                f"GHS {div_wht:,.2f}", "8% — typically withheld at source", "pk", icon="🌸"),
-                unsafe_allow_html=True)
-        with t3:
-            st.markdown(kpi("Realised CGT (Est.)",
-                f"GHS {cgt:,.2f}", "15% on net realised gains from Sells", "y", icon="📋"),
-                unsafe_allow_html=True)
-        with t4:
-            st.markdown(kpi("Unrealised CGT Liability",
-                f"GHS {cgt_unreal:,.2f}",
-                "If all profitable positions sold today", "r", icon="⚠️"),
-                unsafe_allow_html=True)
-        st.markdown(
-            alert_box("Tax Disclaimer",
-                "These are <b>estimates only</b> based on publicly available Ghana Revenue Authority rates. "
-                "Actual tax liability depends on your full tax position, holding period, and applicable exemptions. "
-                "Consult a qualified Ghana tax professional for advice.",
-                "info"), unsafe_allow_html=True)
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 6 — RISK & SCENARIOS
-    # ═══════════════════════════════════════════════════════════════════════════
-    with tab6:
-        be = chart_breakeven(eq)
+        be=chart_breakeven(eq)
         if be:
             shdr("🎯 Break-even Analysis")
-            st.plotly_chart(be, use_container_width=True)
+            st.plotly_chart(be,use_container_width=True)
         else:
             st.success("🎉 All positions are currently profitable — no break-even analysis needed.")
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("⚖️ Concentration Risk (HHI)")
-        conc_fig, hhi_val, risk_lbl, rc = chart_concentration(eq)
-        st.plotly_chart(conc_fig, use_container_width=True)
-        st.markdown(
-            f"<div style='text-align:center;color:{p.MUTED};font-size:.82rem;margin-top:-8px;"
-            f"font-family:DM Mono,monospace;'>"
-            f"HHI: <b style='color:{rc}'>{hhi_val}</b> — "
-            f"<b style='color:{rc}'>{risk_lbl}</b> concentration &nbsp;·&nbsp;"
-            f"<span style='color:{EMERALD}'>Low &lt;1500</span> · "
-            f"<span style='color:{AMBER}'>Moderate 1500–2500</span> · "
-            f"<span style='color:{RUBY}'>High &gt;2500</span>"
-            f"</div>", unsafe_allow_html=True)
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        cf,hhi_val,risk_lbl,rc=chart_concentration(eq)
+        st.plotly_chart(cf,use_container_width=True)
+        st.markdown(f"<div style='text-align:center;color:{p.MUTED};font-size:.82rem;margin-top:-8px;font-family:DM Mono,monospace;'>"
+                    f"HHI: <b style='color:{rc}'>{hhi_val}</b> — <b style='color:{rc}'>{risk_lbl}</b> &nbsp;·&nbsp;"
+                    f"<span style='color:{EMERALD}'>Low &lt;1500</span> · <span style='color:{AMBER}'>Moderate 1500–2500</span> · <span style='color:{RUBY}'>High &gt;2500</span>"
+                    f"</div>",unsafe_allow_html=True)
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("🛠️ Rebalance Recommendations")
-        if hhi_val > 2500:
-            st.warning("⚠️ High concentration — consider the adjustments below:")
-        else:
-            st.success("✅ Concentration within acceptable range. Fine-tuning suggestions below.")
-
-        ev    = m["equities_val"]
-        n     = len(eq)
-        equal = 100 / n if n else 10
-        rec_rows = []
-        for e in sorted(eq, key=lambda x: x["market_value"] / ev if ev else 0, reverse=True):
-            wt = e["market_value"] / ev * 100 if ev else 0
-            if   wt > 20:                     action = f"🔴 Trim → target 10–15% (currently {wt:.1f}%)"
-            elif wt < 3 and e["gain_pct"] >= 0: action = f"🟢 Consider adding — only {wt:.1f}%"
-            elif e["gain_pct"] < -15:          action = f"🟡 Review thesis — {e['gain_pct']:+.1f}% return"
-            else:                              action = f"✅ Hold — {wt:.1f}% (target ~{equal:.1f}%)"
-            rec_rows.append({
-                "Ticker": e["ticker"], "Sector": e["sector"],
-                "Current Weight": f"{wt:.1f}%",
-                "Equal-weight Target": f"{equal:.1f}%",
-                "Return": f"{e['gain_pct']:+.1f}%",
-                "Recommendation": action,
-            })
-        st.dataframe(pd.DataFrame(rec_rows), use_container_width=True, hide_index=True)
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+        if hhi_val>2500: st.warning("⚠️ High concentration — consider the adjustments below:")
+        else: st.success("✅ Concentration within acceptable range.")
+        ev=m["ev"]; n=len(eq); equal=100/n if n else 10
+        rec_rows=[]
+        for e in sorted(eq,key=lambda x:x["market_value"]/ev if ev else 0,reverse=True):
+            wt=e["market_value"]/ev*100 if ev else 0
+            if wt>20:         action=f"🔴 Trim → target 10–15% (currently {wt:.1f}%)"
+            elif wt<3 and e["gain_pct"]>=0: action=f"🟢 Consider adding — only {wt:.1f}%"
+            elif e["gain_pct"]<-15: action=f"🟡 Review thesis — {e['gain_pct']:+.1f}%"
+            else:             action=f"✅ Hold — {wt:.1f}% (target ~{equal:.1f}%)"
+            rec_rows.append({"Ticker":e["ticker"],"Sector":e["sector"],
+                "Current Weight":f"{wt:.1f}%","Equal-weight Target":f"{equal:.1f}%",
+                "Return":f"{e['gain_pct']:+.1f}%","Recommendation":action})
+        st.dataframe(pd.DataFrame(rec_rows),use_container_width=True,hide_index=True)
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("🔮 What-If Scenario Simulator")
         st.caption("Adjust sliders to simulate price moves on each position")
-        rows_of_5 = [eq[i:i+5] for i in range(0, len(eq), 5)]
-        sim_mult  = {}
-        for row in rows_of_5:
-            sc = st.columns(len(row))
-            for col, e in zip(sc, row):
-                chg = col.slider(e["ticker"], min_value=-50, max_value=150,
-                                 value=0, step=1, format="%d%%", key=f"sim_{e['ticker']}")
-                sim_mult[e["ticker"]] = 1 + chg / 100
-
-        sim_mv    = sum(e["market_value"] * sim_mult.get(e["ticker"], 1) for e in eq)
-        sim_total = sim_mv + m["cash_val"] + m["funds_val"]
-        sim_gain  = sum((e["market_value"]*sim_mult.get(e["ticker"],1)) - e["total_cost"] for e in eq)
-        sim_delta = sim_total - m["total_value"]
-        sim_roi   = ((sim_total - m["net_invested"]) / m["net_invested"] * 100) if m["net_invested"] else 0
-
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        with sc1:
-            st.markdown(kpi("Simulated Total Value", f"GHS {sim_total:,.2f}",
-                f"{'+'if sim_delta>=0 else ''}GHS {sim_delta:,.2f} vs now",
-                "g" if sim_delta >= 0 else "r"), unsafe_allow_html=True)
-        with sc2:
-            st.markdown(kpi("Simulated G/L",
-                f"<span class='{pn(sim_gain)}'>{'+'if sim_gain>=0 else ''}GHS {sim_gain:,.2f}</span>",
-                f"{(sim_gain/m['total_cost']*100):+.2f}% on cost",
-                "g" if sim_gain >= 0 else "r"), unsafe_allow_html=True)
-        with sc3:
-            st.markdown(kpi("Simulated ROI",
-                f"<span class='{pn(sim_roi)}'>{sim_roi:+.2f}%</span>",
-                f"Current: {m['overall_roi']:+.2f}%",
-                "g" if sim_roi >= 0 else "r"), unsafe_allow_html=True)
+        sim_mult={}
+        for row in [eq[i:i+5] for i in range(0,len(eq),5)]:
+            sc=st.columns(len(row))
+            for col,e in zip(sc,row):
+                chg=col.slider(e["ticker"],min_value=-50,max_value=150,value=0,step=1,format="%d%%",key=f"sim_{e['ticker']}")
+                sim_mult[e["ticker"]]=1+chg/100
+        sim_mv=sum(e["market_value"]*sim_mult.get(e["ticker"],1) for e in eq)
+        sim_total=sim_mv+m["cv"]+m["fv"]
+        sim_gain=sum((e["market_value"]*sim_mult.get(e["ticker"],1))-e["total_cost"] for e in eq)
+        sim_delta=sim_total-m["tv"]
+        sim_roi=((sim_total-m["ni"])/m["ni"]*100) if m["ni"] else 0
+        sc1,sc2,sc3,sc4=st.columns(4)
+        with sc1: st.markdown(kpi("Simulated Total Value",f"GHS {sim_total:,.2f}",
+            f"{'+'if sim_delta>=0 else ''}GHS {sim_delta:,.2f} vs now","g" if sim_delta>=0 else "r"),unsafe_allow_html=True)
+        with sc2: st.markdown(kpi("Simulated G/L",
+            f"<span class='{pn(sim_gain)}'>{'+'if sim_gain>=0 else ''}GHS {sim_gain:,.2f}</span>",
+            f"{(sim_gain/m['tc']*100):+.2f}% on cost","g" if sim_gain>=0 else "r"),unsafe_allow_html=True)
+        with sc3: st.markdown(kpi("Simulated ROI",
+            f"<span class='{pn(sim_roi)}'>{sim_roi:+.2f}%</span>",
+            f"Current: {m['roi']:+.2f}%","g" if sim_roi>=0 else "r"),unsafe_allow_html=True)
         with sc4:
-            gchg = sim_gain - m["total_gain"]
+            gchg=sim_gain-m["tg"]
             st.markdown(kpi("G/L Change",
                 f"<span class='{pn(gchg)}'>{'+'if gchg>=0 else ''}GHS {gchg:,.2f}</span>",
-                "vs current unrealised G/L",
-                "g" if gchg >= 0 else "r"), unsafe_allow_html=True)
+                "vs current unrealised G/L","g" if gchg>=0 else "r"),unsafe_allow_html=True)
+        sim_df=pd.DataFrame([{"ticker":e["ticker"],"current":e["market_value"],
+            "simulated":e["market_value"]*sim_mult.get(e["ticker"],1)} for e in eq]).sort_values("simulated",ascending=False)
+        fig_sim=go.Figure()
+        fig_sim.add_trace(go.Bar(name="Current",x=sim_df["ticker"],y=sim_df["current"],marker_color=VIOLET,opacity=0.65))
+        fig_sim.add_trace(go.Bar(name="Simulated",x=sim_df["ticker"],y=sim_df["simulated"],
+            marker=dict(color=[EMERALD if s>c else RUBY for s,c in zip(sim_df["simulated"],sim_df["current"])],opacity=0.9)))
+        fig_sim.update_layout(**T(title="Current vs Simulated Market Value",yt="GHS"),barmode="group",height=320)
+        st.plotly_chart(fig_sim,use_container_width=True)
 
-        sim_df = pd.DataFrame([{
-            "ticker":    e["ticker"],
-            "current":   e["market_value"],
-            "simulated": e["market_value"] * sim_mult.get(e["ticker"], 1),
-        } for e in eq]).sort_values("simulated", ascending=False)
-        fig_sim = go.Figure()
-        fig_sim.add_trace(go.Bar(name="Current", x=sim_df["ticker"], y=sim_df["current"],
-                                 marker_color=VIOLET, opacity=0.65))
-        fig_sim.add_trace(go.Bar(name="Simulated", x=sim_df["ticker"], y=sim_df["simulated"],
-                                 marker=dict(
-                                     color=[EMERALD if s > c else RUBY
-                                            for s, c in zip(sim_df["simulated"], sim_df["current"])],
-                                     opacity=0.9)))
-        fig_sim.update_layout(**T(title="Current vs Simulated Market Value", yt="GHS"), barmode="group", height=320)
-        st.plotly_chart(fig_sim, use_container_width=True)
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 7 — CASH FLOW
-    # ═══════════════════════════════════════════════════════════════════════════
-    with tab7:
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 5 — CASH FLOW
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab5:
         shdr("Cash Flow & History")
-        cf = chart_cashflow(txs)
-        if cf:
-            st.plotly_chart(cf, use_container_width=True)
-
-        div_chart = chart_dividend_timeline(txs)
-        if div_chart:
+        cf=chart_cashflow(txs)
+        if cf: st.plotly_chart(cf,use_container_width=True)
+        div_c=chart_dividend_timeline(txs)
+        if div_c:
             shdr("💎 Dividend Income Timeline")
-            st.plotly_chart(div_chart, use_container_width=True)
-
-        cl, cr = st.columns([3, 2])
+            st.plotly_chart(div_c,use_container_width=True)
+        cl,cr=st.columns([3,2])
         with cl:
-            cml = chart_cumulative(txs, m["total_value"])
-            if cml: st.plotly_chart(cml, use_container_width=True)
+            cml=chart_cumulative(txs,m["tv"])
+            if cml: st.plotly_chart(cml,use_container_width=True)
         with cr:
-            rl = chart_rolling_return(txs, m["total_value"])
-            if rl: st.plotly_chart(rl, use_container_width=True)
+            df_r=pd.DataFrame(txs).sort_values("date")
+            if not df_r.empty:
+                df_r["net"]=df_r["credit"]-df_r["debit"]; df_r["cumul"]=df_r["net"].cumsum()
+                scale=m["tv"]/df_r["cumul"].iloc[-1] if df_r["cumul"].iloc[-1] else 1
+                df_r["proxy"]=df_r["cumul"]*scale
+                fig_r=go.Figure()
+                fig_r.add_trace(go.Scatter(x=df_r["date"],y=df_r["proxy"],mode="lines",fill="tozeroy",
+                    fillcolor="rgba(6,182,212,0.08)",line=dict(color=TEAL,width=2.5),name="Est. Value"))
+                fig_r.add_trace(go.Scatter(x=df_r["date"],y=df_r["cumul"],mode="lines",
+                    line=dict(color=GOLD,width=1.5,dash="dot"),name="Net Invested"))
+                fig_r.update_layout(**T(title="Estimated Portfolio Value Over Time",xt="Date",yt="GHS"),height=320)
+                st.plotly_chart(fig_r,use_container_width=True)
 
-        tx_df2 = pd.DataFrame(txs)
+        # DRIP Simulator
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("🌱 Dividend Reinvestment (DRIP) Simulator",
+             "What your portfolio would be worth had you reinvested every dividend")
+        if drip_rows:
+            drip_df = pd.DataFrame(drip_rows)
+            d1,d2,d3,d4 = st.columns(4)
+            with d1: st.markdown(kpi("Total Dividends Received",f"GHS {m['div']:,.2f}",
+                "Cash received as dividends","pk",icon="🌸"),unsafe_allow_html=True)
+            with d2: st.markdown(kpi("DRIP Extra Value",f"+GHS {drip_value:,.2f}",
+                "If dividends had been reinvested","g",icon="🌱"),unsafe_allow_html=True)
+            with d3: st.markdown(kpi("DRIP Portfolio Value",f"GHS {m['tv']+drip_value:,.2f}",
+                f"+{drip_value/m['tv']*100:.1f}% vs current","t",icon="💰"),unsafe_allow_html=True)
+            with d4: st.markdown(kpi("Missed Compounding",
+                f"GHS {drip_value:,.2f}",
+                "Left on the table by taking cash","re",icon="🔥"),unsafe_allow_html=True)
+            st.dataframe(drip_df[["date","guessed_ticker","amount","price_at_reinvest",
+                                   "extra_shares","current_value"]].rename(columns={
+                "date":"Date","guessed_ticker":"Stock","amount":"Dividend (GHS)",
+                "price_at_reinvest":"Price at Reinvest","extra_shares":"Extra Shares","current_value":"Current Value (GHS)"}),
+                use_container_width=True,hide_index=True)
+        else:
+            st.info("No dividend transactions found in this statement.")
+
+        # Fee Analysis
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("🧾 Transaction Fee Analysis",
+             "Estimated fees on all buy/sell transactions (IC Brokerage + SEC + GhSE + CSDR)")
+        if fee_rows:
+            fee_df = pd.DataFrame(fee_rows)
+            f1,f2,f3,f4 = st.columns(4)
+            total_buy_vol  = fee_df[fee_df["type"]=="Buy"]["volume"].sum()
+            total_sell_vol = fee_df[fee_df["type"]=="Sell"]["volume"].sum()
+            with f1: st.markdown(kpi("Total Est. Fees Paid",f"GHS {total_fees:,.2f}",
+                f"{total_fees/(total_buy_vol+total_sell_vol)*100:.2f}% of total volume","re",icon="🧾"),unsafe_allow_html=True)
+            with f2: st.markdown(kpi("Buy Fees",f"GHS {fee_df[fee_df['type']=='Buy']['est_fees'].sum():,.2f}",
+                f"on GHS {total_buy_vol:,.0f} buy volume","r",icon="📥"),unsafe_allow_html=True)
+            with f3: st.markdown(kpi("Sell Fees",f"GHS {fee_df[fee_df['type']=='Sell']['est_fees'].sum():,.2f}",
+                f"on GHS {total_sell_vol:,.0f} sell volume","y",icon="📤"),unsafe_allow_html=True)
+            with f4: st.markdown(kpi("Fee Drag on Portfolio",
+                f"{total_fees/m['tv']*100:.2f}%",
+                "Total fees / current portfolio value","vi",icon="🔩"),unsafe_allow_html=True)
+            st.plotly_chart(chart_fees_over_time(fee_rows),use_container_width=True)
+            # Fee breakdown table
+            fee_breakdown_df = pd.DataFrame({"Fee Component":list(IC_FEES.keys()),
+                "Rate":[f"{v*100:.2f}%" for v in IC_FEES.values()],
+                "Est. Total Paid":[f"GHS {total_buy_vol*v + total_sell_vol*v:,.2f}"
+                                   for v in IC_FEES.values()]})
+            st.dataframe(fee_breakdown_df,use_container_width=True,hide_index=True)
+        else:
+            st.info("No buy/sell transactions found for fee analysis.")
+
+        # Flow summary
+        tx_df2=pd.DataFrame(txs)
         if not tx_df2.empty:
-            tx_df2["amount"] = tx_df2["credit"] + tx_df2["debit"]
-            grp = tx_df2.groupby("type")["amount"].sum().reset_index().sort_values("amount", ascending=False)
-            cmap_t = {"Buy":AZURE,"Sell":AMBER,"Credit":EMERALD,
-                      "Withdrawal":RUBY,"Dividend":TEAL,"Other":SLATE}
-            fig_tt = go.Figure(go.Bar(
-                x=grp["type"], y=grp["amount"],
-                marker_color=[cmap_t.get(t, SLATE) for t in grp["type"]],
-                marker_opacity=0.85,
-                text=[f"GHS {v:,.0f}" for v in grp["amount"]], textposition="outside",
-                textfont=dict(size=10, family="DM Mono"),
-                hovertemplate="%{x}: GHS %{y:,.2f}<extra></extra>",
-            ))
-            fig_tt.update_layout(**T(title="Volume by Transaction Type", yt="GHS"), height=280)
-            st.plotly_chart(fig_tt, use_container_width=True)
-
-        if not tx_df2.empty:
-            tx_df2["month"] = tx_df2["date"].dt.to_period("M")
-            n_months = tx_df2["month"].nunique()
-            buy_vol  = tx_df2[tx_df2["type"]=="Buy"]["amount"].sum()
-            sell_vol = tx_df2[tx_df2["type"]=="Sell"]["amount"].sum()
-            flow_quality = ("Active Investor" if buy_vol > sell_vol * 2 else
-                            "Active Trader"   if sell_vol > buy_vol   else "Balanced")
-
-            st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+            tx_df2["month"]=tx_df2["date"].dt.to_period("M"); n_months=tx_df2["month"].nunique()
+            tx_df2["amount"]=tx_df2["credit"]+tx_df2["debit"]
+            buy_vol=tx_df2[tx_df2["type"]=="Buy"]["amount"].sum()
+            sell_vol=tx_df2[tx_df2["type"]=="Sell"]["amount"].sum()
+            fq="Active Investor" if buy_vol>sell_vol*2 else "Active Trader" if sell_vol>buy_vol else "Balanced"
+            st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
             shdr("Flow Summary")
-            fa1, fa2, fa3, fa4, fa5 = st.columns(5)
-            with fa1: st.markdown(kpi("Months Active", f"{n_months}",
-                f"{len(txs)} total transactions", "b"), unsafe_allow_html=True)
-            with fa2: st.markdown(kpi("Total Contributions", f"GHS {m['net_contributions']:,.2f}",
-                "Cash in", "g"), unsafe_allow_html=True)
-            with fa3: st.markdown(kpi("Total Withdrawals", f"GHS {m['net_withdrawals']:,.2f}",
-                "Cash out", "r"), unsafe_allow_html=True)
-            with fa4: st.markdown(kpi("Net Invested", f"GHS {m['net_invested']:,.2f}",
-                "Contributions − Withdrawals", "t"), unsafe_allow_html=True)
-            with fa5: st.markdown(kpi("Flow Profile", flow_quality,
-                f"Buy vol GHS {buy_vol:,.0f}", "vi", icon="🧭"), unsafe_allow_html=True)
+            fa1,fa2,fa3,fa4,fa5=st.columns(5)
+            with fa1: st.markdown(kpi("Months Active",f"{n_months}",f"{len(txs)} transactions","b"),unsafe_allow_html=True)
+            with fa2: st.markdown(kpi("Total Contributions",f"GHS {m['nc']:,.2f}","Cash in","g"),unsafe_allow_html=True)
+            with fa3: st.markdown(kpi("Total Withdrawals",f"GHS {m['nw']:,.2f}","Cash out","r"),unsafe_allow_html=True)
+            with fa4: st.markdown(kpi("Net Invested",f"GHS {m['ni']:,.2f}","Contributions − Withdrawals","t"),unsafe_allow_html=True)
+            with fa5: st.markdown(kpi("Flow Profile",fq,f"Buy vol GHS {buy_vol:,.0f}","vi",icon="🧭"),unsafe_allow_html=True)
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # TAB 8 — HOLDINGS
-    # ═══════════════════════════════════════════════════════════════════════════
-    with tab8:
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 6 — HOLDINGS
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab6:
         shdr("Equity Positions")
-
-        fc1, fc2, fc3 = st.columns([2, 2, 2])
+        fc1,fc2,fc3=st.columns([2,2,2])
         with fc1:
-            sectors_avail = sorted(set(e["sector"] for e in eq))
-            sel_sectors   = st.multiselect("Sector filter", sectors_avail,
-                                           default=sectors_avail,
-                                           label_visibility="collapsed",
-                                           placeholder="Filter by sector…")
+            sel_sectors=st.multiselect("Sector",sorted(set(e["sector"] for e in eq)),
+                default=sorted(set(e["sector"] for e in eq)),label_visibility="collapsed",placeholder="Filter by sector…")
         with fc2:
-            prof_filter = st.selectbox("Profitability",
-                                       ["All","Profitable","Loss-making"],
-                                       label_visibility="collapsed")
+            pf=st.selectbox("Profitability",["All","Profitable","Loss-making"],label_visibility="collapsed")
         with fc3:
-            sort_by = st.selectbox("Sort by",
-                                   ["Market Value","Return %","Gain/Loss","Weight","Ticker"],
-                                   label_visibility="collapsed")
-
-        eq_filtered = [e for e in eq if e["sector"] in sel_sectors]
-        if prof_filter == "Profitable":    eq_filtered = [e for e in eq_filtered if e["gain_pct"] >= 0]
-        elif prof_filter == "Loss-making": eq_filtered = [e for e in eq_filtered if e["gain_pct"] < 0]
-
-        sort_key_map = {
-            "Market Value": lambda e: e["market_value"],
-            "Return %":     lambda e: e["gain_pct"],
-            "Gain/Loss":    lambda e: e["gain_loss"],
-            "Weight":       lambda e: e["market_value"],
-            "Ticker":       lambda e: e["ticker"],
-        }
-        eq_filtered = sorted(eq_filtered, key=sort_key_map[sort_by],
-                             reverse=(sort_by != "Ticker"))
-
-        pos_rows = []
-        for e in eq_filtered:
-            wt = e["market_value"] / m["equities_val"] * 100 if m["equities_val"] else 0
-            pos_rows.append({
-                "Ticker":     e["ticker"],
-                "Sector":     e["sector"],
-                "Qty":        f"{e['qty']:,.0f}",
-                "Avg Cost":   f"{e['avg_cost']:.4f}",
-                "Stmt Price": f"{e['statement_price']:.4f}",
-                "Live Price": f"{e['live_price']:.4f}" if e["live_price"] else "—",
-                "Today Δ%":   f"{e['change_pct']:+.2f}%" if e.get("change_pct") is not None else "—",
-                "Weight %":   f"{wt:.1f}%",
-                "Cost Basis": f"GHS {e['total_cost']:,.2f}",
-                "Market Val": f"GHS {e['market_value']:,.2f}",
-                "Gain/Loss":  f"{'+'if e['gain_loss']>=0 else ''}GHS {e['gain_loss']:,.2f}",
-                "Return %":   f"{e['gain_pct']:+.1f}%",
-                "Status":     "✅ Profit" if e["gain_pct"] >= 0 else f"🔴 −{abs(e['gain_pct']):.1f}%",
-            })
-
+            sb=st.selectbox("Sort by",["Market Value","Return %","Gain/Loss","Weight","Ticker"],label_visibility="collapsed")
+        eq_f=[e for e in eq if e["sector"] in sel_sectors]
+        if pf=="Profitable":    eq_f=[e for e in eq_f if e["gain_pct"]>=0]
+        elif pf=="Loss-making": eq_f=[e for e in eq_f if e["gain_pct"]<0]
+        sk={"Market Value":lambda e:e["market_value"],"Return %":lambda e:e["gain_pct"],
+            "Gain/Loss":lambda e:e["gain_loss"],"Weight":lambda e:e["market_value"],"Ticker":lambda e:e["ticker"]}
+        eq_f=sorted(eq_f,key=sk[sb],reverse=(sb!="Ticker"))
+        pos_rows=[]
+        for e in eq_f:
+            wt=e["market_value"]/m["ev"]*100 if m["ev"] else 0
+            pos_rows.append({"Ticker":e["ticker"],"Sector":e["sector"],"Qty":f"{e['qty']:,.0f}",
+                "Avg Cost":f"{e['avg_cost']:.4f}","Stmt Price":f"{e['statement_price']:.4f}",
+                "Live Price":f"{e['live_price']:.4f}" if e["live_price"] else "—",
+                "Today Δ%":f"{e['change_pct']:+.2f}%" if e.get("change_pct") is not None else "—",
+                "Weight %":f"{wt:.1f}%","Cost Basis":f"GHS {e['total_cost']:,.2f}",
+                "Market Val":f"GHS {e['market_value']:,.2f}",
+                "Gain/Loss":f"{'+'if e['gain_loss']>=0 else ''}GHS {e['gain_loss']:,.2f}",
+                "Return %":f"{e['gain_pct']:+.1f}%","Status":"✅ Profit" if e["gain_pct"]>=0 else f"🔴 −{abs(e['gain_pct']):.1f}%"})
         def _style_row(row):
-            s  = [""] * len(row)
-            ig = list(row.index).index("Gain/Loss")
-            ir = list(row.index).index("Return %")
-            c  = (f"color:{EMERALD};font-weight:600" if "+" in row["Gain/Loss"]
-                  else f"color:{RUBY};font-weight:600")
-            s[ig] = s[ir] = c
-            return s
-
-        df_pos = pd.DataFrame(pos_rows)
+            s=[""]* len(row); ig=list(row.index).index("Gain/Loss"); ir=list(row.index).index("Return %")
+            c=f"color:{EMERALD};font-weight:600" if "+" in row["Gain/Loss"] else f"color:{RUBY};font-weight:600"
+            s[ig]=s[ir]=c; return s
+        df_pos=pd.DataFrame(pos_rows)
         if not df_pos.empty:
-            st.dataframe(df_pos.style.apply(_style_row, axis=1),
-                         use_container_width=True, hide_index=True)
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+            st.dataframe(df_pos.style.apply(_style_row,axis=1),use_container_width=True,hide_index=True)
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("📊 Invested → Market Value Progress")
-        for e in sorted(eq_filtered, key=lambda x: x["market_value"], reverse=True):
-            prog = min(1.0, e["market_value"] / e["total_cost"]) if e["total_cost"] else 0
-            bc   = EMERALD if e["gain_pct"] >= 0 else RUBY
-            lbl  = f"{e['gain_pct']:+.1f}%"
-            wt   = e["market_value"] / m["equities_val"] * 100 if m["equities_val"] else 0
+        for e in sorted(eq_f,key=lambda x:x["market_value"],reverse=True):
+            prog=min(1.0,e["market_value"]/e["total_cost"]) if e["total_cost"] else 0
+            bc=EMERALD if e["gain_pct"]>=0 else RUBY
+            wt=e["market_value"]/m["ev"]*100 if m["ev"] else 0
             st.markdown(
-                f"<div style='display:flex;justify-content:space-between;"
-                f"font-size:.78rem;margin-bottom:2px;align-items:baseline;'>"
+                f"<div style='display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:2px;align-items:baseline;'>"
                 f"<span style='font-weight:700;color:{p.TEXT};font-family:Epilogue,sans-serif;'>"
                 f"{e['ticker']} <span class='sec-badge'>{e['sector']}</span></span>"
                 f"<span style='font-family:DM Mono,monospace;'>"
-                f"<span style='color:{p.MUTED};margin-right:8px;'>"
-                f"GHS {e['market_value']:,.2f} · {wt:.1f}%</span>"
-                f"<span style='color:{bc};font-weight:600;'>{lbl}</span></span></div>"
-                f"<div class='prog-wrap'>"
-                f"<div class='prog-bar' style='width:{min(100,prog*100):.1f}%;background:{bc};'></div>"
-                f"</div><div style='height:10px'></div>",
-                unsafe_allow_html=True)
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        shdr("🎯 Position Sizer",
-             "Enter a target total portfolio size to see required trades per position")
-        with st.expander("Open Position Sizer", expanded=False):
-            target_total = st.number_input("Target Portfolio Value (GHS)",
-                                           min_value=0.0, value=float(m["total_value"]),
-                                           step=1000.0, format="%.2f")
-            target_eq_pct = st.slider("Target Equity Allocation (%)",
-                                      min_value=10, max_value=100, value=70, step=5)
-            target_eq_val = target_total * target_eq_pct / 100
-            strategy = st.selectbox("Weighting Strategy",
-                                    ["Equal Weight","Market-cap Weight (keep current)"])
-            sizer_rows = []
-            for e in sorted(eq, key=lambda x: x["market_value"], reverse=True):
-                if strategy == "Equal Weight":
-                    target_mv = target_eq_val / len(eq)
-                else:
-                    w         = e["market_value"] / m["equities_val"] if m["equities_val"] else 0
-                    target_mv = target_eq_val * w
-                delta_ghs = target_mv - e["market_value"]
-                price     = e["live_price"] or e["statement_price"]
-                delta_shr = round(delta_ghs / price) if price else 0
-                sizer_rows.append({
-                    "Ticker":          e["ticker"],
-                    "Current Value":   f"GHS {e['market_value']:,.2f}",
-                    "Target Value":    f"GHS {target_mv:,.2f}",
-                    "Δ Value":         f"{'+'if delta_ghs>=0 else ''}GHS {delta_ghs:,.2f}",
-                    "Shares to Trade": f"{'+'if delta_shr>=0 else ''}{delta_shr:,} shares",
-                    "Action":          ("🟢 Buy" if delta_shr > 0 else
-                                        "🔴 Sell" if delta_shr < 0 else "✅ Hold"),
-                })
-            if sizer_rows:
-                st.dataframe(pd.DataFrame(sizer_rows), use_container_width=True, hide_index=True)
-                st.caption(f"Target equity: GHS {target_eq_val:,.2f} "
-                           f"({target_eq_pct}% of GHS {target_total:,.2f})")
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-        dl1, dl2 = st.columns(2)
+                f"<span style='color:{p.MUTED};margin-right:8px;'>GHS {e['market_value']:,.2f} · {wt:.1f}%</span>"
+                f"<span style='color:{bc};font-weight:600;'>{e['gain_pct']:+.1f}%</span></span></div>"
+                f"<div class='prog-wrap'><div class='prog-bar' style='width:{min(100,prog*100):.1f}%;background:{bc};'></div></div>"
+                f"<div style='height:10px'></div>",unsafe_allow_html=True)
+        # Position sizer
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("🎯 Position Sizer")
+        with st.expander("Open Position Sizer",expanded=False):
+            tt=st.number_input("Target Portfolio Value (GHS)",min_value=0.0,value=float(m["tv"]),step=1000.0,format="%.2f")
+            tep=st.slider("Target Equity Allocation (%)",10,100,70,step=5)
+            tev=tt*tep/100
+            strat=st.selectbox("Strategy",["Equal Weight","Market-cap Weight (keep current)"])
+            sr=[]
+            for e in sorted(eq,key=lambda x:x["market_value"],reverse=True):
+                tmv=tev/len(eq) if strat=="Equal Weight" else tev*(e["market_value"]/m["ev"] if m["ev"] else 0)
+                dg=tmv-e["market_value"]; pr=e["live_price"] or e["statement_price"]; ds=round(dg/pr) if pr else 0
+                sr.append({"Ticker":e["ticker"],"Current":f"GHS {e['market_value']:,.2f}","Target":f"GHS {tmv:,.2f}",
+                    "Δ Value":f"{'+'if dg>=0 else ''}GHS {dg:,.2f}",
+                    "Shares to Trade":f"{'+'if ds>=0 else ''}{ds:,} shares",
+                    "Action":"🟢 Buy" if ds>0 else "🔴 Sell" if ds<0 else "✅ Hold"})
+            if sr: st.dataframe(pd.DataFrame(sr),use_container_width=True,hide_index=True)
+        # CSV
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        dl1,dl2=st.columns(2)
         with dl1:
-            csv_hold = df_pos.to_csv(index=False).encode("utf-8") if not df_pos.empty else b""
-            st.download_button("📥 Download Holdings CSV", csv_hold,
-                               f"IC_holdings_{data['account_number']}_{datetime.now().strftime('%Y%m%d')}.csv",
-                               "text/csv", use_container_width=True)
+            csv_hold=df_pos.to_csv(index=False).encode("utf-8") if not df_pos.empty else b""
+            st.download_button("📥 Download Holdings CSV",csv_hold,
+                f"IC_holdings_{data['account_number']}_{datetime.now().strftime('%Y%m%d')}.csv","text/csv",use_container_width=True)
         with dl2:
-            tx_export = pd.DataFrame(txs)
-            if not tx_export.empty:
-                csv_tx = tx_export.to_csv(index=False).encode("utf-8")
-                st.download_button("📥 Download Transaction Log CSV", csv_tx,
-                                   f"IC_transactions_{data['account_number']}_{datetime.now().strftime('%Y%m%d')}.csv",
-                                   "text/csv", use_container_width=True)
-
-        st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
+            tx_ex=pd.DataFrame(txs)
+            if not tx_ex.empty:
+                st.download_button("📥 Download Transaction Log CSV",tx_ex.to_csv(index=False).encode("utf-8"),
+                    f"IC_transactions_{data['account_number']}_{datetime.now().strftime('%Y%m%d')}.csv","text/csv",use_container_width=True)
+        # Transaction history
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
         shdr("Transaction History")
-        tx_df = pd.DataFrame(txs).sort_values("date", ascending=False)
-        emojis = {"Buy":"🔵","Sell":"🟡","Credit":"🟢","Withdrawal":"🔴","Dividend":"💎","Other":"⚪"}
-        tx_df["Type"] = tx_df["type"].map(lambda t: f"{emojis.get(t,'⚪')} {t}")
-
-        tf1, tf2, tf3 = st.columns([2, 2, 3])
-        with tf1:
-            filt = st.multiselect("Type", list(tx_df["Type"].unique()),
-                                  default=list(tx_df["Type"].unique()),
-                                  label_visibility="collapsed")
+        tx_df=pd.DataFrame(txs).sort_values("date",ascending=False)
+        emojis={"Buy":"🔵","Sell":"🟡","Credit":"🟢","Withdrawal":"🔴","Dividend":"💎","Other":"⚪"}
+        tx_df["Type"]=tx_df["type"].map(lambda t:f"{emojis.get(t,'⚪')} {t}")
+        tf1,tf2,tf3=st.columns([2,2,3])
+        with tf1: filt=st.multiselect("Type",list(tx_df["Type"].unique()),default=list(tx_df["Type"].unique()),label_visibility="collapsed")
         with tf2:
-            date_range = st.date_input(
-                "Dates",
-                value=(tx_df["date"].min().date() if not tx_df.empty else datetime.now().date(),
-                       tx_df["date"].max().date() if not tx_df.empty else datetime.now().date()),
-                label_visibility="collapsed")
-        with tf3:
-            srch = st.text_input("Search", placeholder="🔍 Search description…",
-                                 label_visibility="collapsed")
+            dr=st.date_input("Dates",value=(tx_df["date"].min().date(),tx_df["date"].max().date()),label_visibility="collapsed")
+        with tf3: srch=st.text_input("Search",placeholder="🔍 Search description…",label_visibility="collapsed")
+        view=tx_df[tx_df["Type"].isin(filt)]
+        if len(dr)==2:
+            view=view[(view["date"]>=pd.Timestamp(dr[0]))&(view["date"]<=pd.Timestamp(dr[1]))]
+        if srch: view=view[view["description"].str.contains(srch,case=False,na=False)]
+        vs=view[["date_str","Type","description","credit","debit"]].rename(columns={
+            "date_str":"Date","description":"Description","credit":"Credit (GHS)","debit":"Debit (GHS)"})
+        vs["Credit (GHS)"]=vs["Credit (GHS)"].apply(lambda v:f"+{v:,.2f}" if v>0 else "—")
+        vs["Debit (GHS)"]=vs["Debit (GHS)"].apply(lambda v:f"-{v:,.2f}" if v>0 else "—")
+        vs["Description"]=vs["Description"].str[:100]
+        st.caption(f"Showing {len(vs):,} of {len(tx_df):,} transactions")
+        st.dataframe(vs,use_container_width=True,hide_index=True,height=400)
 
-        view = tx_df[tx_df["Type"].isin(filt)]
-        if len(date_range) == 2:
-            s2, e2 = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
-            view   = view[(view["date"] >= s2) & (view["date"] <= e2)]
-        if srch:
-            view = view[view["description"].str.contains(srch, case=False, na=False)]
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 7 — TIMELINE
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab7:
+        shdr("Portfolio Timeline",f"{len(statements)} statement(s) loaded")
+        if len(statements) < 2:
+            st.info("📤 Upload **multiple statements** (one per month/quarter) to unlock the timeline view. "
+                    "Each PDF adds a data point to your equity curve.")
+        else:
+            df_tl = build_timeline(statements_sorted)
+            st.plotly_chart(chart_timeline(df_tl),use_container_width=True)
+            cl,cr=st.columns(2)
+            with cl: st.plotly_chart(chart_timeline_roi(df_tl),use_container_width=True)
+            with cr:
+                # n_stocks over time
+                fig_ns=go.Figure(go.Scatter(x=df_tl["date"],y=df_tl["n_stocks"],mode="lines+markers",
+                    line=dict(color=VIOLET,width=2.5),marker=dict(size=8,color=VIOLET,line=dict(color=p.BG,width=2)),
+                    text=df_tl["label"],hovertemplate="<b>%{text}</b><br>Positions: %{y}<extra></extra>"))
+                fig_ns.update_layout(**T(title="Number of Positions Over Time",yt="# Stocks"),height=300)
+                st.plotly_chart(fig_ns,use_container_width=True)
 
-        view_show = view[["date_str","Type","description","credit","debit"]].rename(columns={
-            "date_str":"Date","description":"Description",
-            "credit":"Credit (GHS)","debit":"Debit (GHS)"})
-        view_show["Credit (GHS)"] = view_show["Credit (GHS)"].apply(
-            lambda v: f"+{v:,.2f}" if v > 0 else "—")
-        view_show["Debit (GHS)"]  = view_show["Debit (GHS)"].apply(
-            lambda v: f"-{v:,.2f}" if v > 0 else "—")
-        view_show["Description"]  = view_show["Description"].str[:100]
-        st.caption(f"Showing {len(view_show):,} of {len(tx_df):,} transactions")
-        st.dataframe(view_show, use_container_width=True, hide_index=True, height=400)
+            # M-o-M table
+            st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+            shdr("Statement-on-Statement Summary")
+            tl_show=df_tl[["label","total_value","equities_val","cash_val","gain_loss","roi","n_stocks","mom_pct"]].copy()
+            tl_show.columns=["Date","Total Value (GHS)","Equities (GHS)","Cash (GHS)","Unrealised G/L","ROI (%)","# Stocks","MoM Change (%)"]
+            tl_show["Total Value (GHS)"]=tl_show["Total Value (GHS)"].apply(lambda v:f"{v:,.2f}")
+            tl_show["Equities (GHS)"]=tl_show["Equities (GHS)"].apply(lambda v:f"{v:,.2f}")
+            tl_show["Cash (GHS)"]=tl_show["Cash (GHS)"].apply(lambda v:f"{v:,.2f}")
+            tl_show["Unrealised G/L"]=tl_show["Unrealised G/L"].apply(lambda v:f"{'+'if v>=0 else ''}{v:,.2f}")
+            tl_show["ROI (%)"]=tl_show["ROI (%)"].apply(lambda v:f"{v:+.2f}%")
+            tl_show["MoM Change (%)"]=tl_show["MoM Change (%)"].apply(lambda v:f"{v:+.1f}%" if pd.notna(v) else "—")
+            st.dataframe(tl_show,use_container_width=True,hide_index=True)
+
+        # Statement Diff
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("🔍 Statement Diff View",
+             "Compare two statements to see exactly what changed")
+        if len(statements) < 2:
+            st.info("Upload at least 2 statements to use the diff view.")
+        else:
+            filenames = [s["_filename"] for s in statements_sorted]
+            d_col1,d_col2=st.columns(2)
+            with d_col1: old_sel=st.selectbox("Older statement",filenames[:-1],index=0)
+            with d_col2: new_sel=st.selectbox("Newer statement",filenames[1:],index=len(filenames)-2)
+            old_s=next(s for s in statements_sorted if s["_filename"]==old_sel)
+            new_s=next(s for s in statements_sorted if s["_filename"]==new_sel)
+            diff_df=diff_statements(old_s,new_s)
+            if not diff_df.empty:
+                new_count  = len(diff_df[diff_df["Status"].str.contains("NEW")])
+                exit_count = len(diff_df[diff_df["Status"].str.contains("EXITED")])
+                ch_count   = len(diff_df[diff_df["Status"].str.contains("INCREASED|REDUCED")])
+                dc1,dc2,dc3=st.columns(3)
+                with dc1: st.markdown(kpi("New Positions",str(new_count),"Added between statements","g",icon="🟢"),unsafe_allow_html=True)
+                with dc2: st.markdown(kpi("Exited Positions",str(exit_count),"Removed between statements","r",icon="🔴"),unsafe_allow_html=True)
+                with dc3: st.markdown(kpi("Changed Positions",str(ch_count),"Weight shifted","b",icon="⬆️"),unsafe_allow_html=True)
+                st.dataframe(diff_df,use_container_width=True,hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # TAB 8 — REPORT
+    # ══════════════════════════════════════════════════════════════════════════
+    with tab8:
+        shdr("📄 Downloadable Portfolio Report")
+        st.markdown(
+            f"<div style='background:rgba(8,9,30,0.8);border:1px solid {p.BORDER};border-radius:14px;"
+            f"padding:24px 28px;margin-bottom:20px;font-family:Epilogue,sans-serif;'>"
+            f"<div style='font-size:1rem;font-weight:700;color:{p.TEXT};margin-bottom:8px;'>"
+            f"Generate a full HTML report for this portfolio</div>"
+            f"<div style='font-size:.84rem;color:{p.MUTED};line-height:1.7;'>"
+            f"The report includes all KPIs, holdings table, asset allocation, and key metrics. "
+            f"Open it in your browser and use <b>File → Print → Save as PDF</b> for a professional PDF report card. "
+            f"Formatted for both screen and print.</div></div>",
+            unsafe_allow_html=True)
+
+        if st.button("⚡ Generate Report", type="primary", use_container_width=False):
+            with st.spinner("Building report…"):
+                html = build_html_report(data, eq, txs, ps, m, am)
+            st.download_button(
+                label="📥 Download HTML Report",
+                data=html.encode("utf-8"),
+                file_name=f"IC_Portfolio_Report_{data['account_number']}_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=False)
+            st.success("Report ready! Click the download button above.")
+
+        # Report preview
+        st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+        shdr("Report Preview")
+        r1,r2=st.columns(2)
+        with r1:
+            st.markdown(
+                f"<div style='background:rgba(8,9,30,0.8);border:1px solid {p.BORDER};border-radius:14px;padding:20px 22px;'>"
+                f"<div style='font-size:.65rem;color:{p.MUTED};text-transform:uppercase;letter-spacing:.1em;font-weight:700;margin-bottom:12px;'>Summary</div>",
+                unsafe_allow_html=True)
+            rows = [
+                ("Client",         data["client_name"]),
+                ("Account",        data["account_number"]),
+                ("Statement Date", data["report_date"]),
+                ("Portfolio Value",f"GHS {m['tv']:,.2f}"),
+                ("Net Invested",   f"GHS {m['ni']:,.2f}"),
+                ("Unrealised G/L", f"{'+'if m['tg']>=0 else ''}GHS {m['tg']:,.2f}"),
+                ("ROI",            f"{m['roi']:+.2f}%"),
+                ("CAGR",           f"{m['cagr']:+.2f}%" if m['cagr'] else "—"),
+                ("Health Score",   f"{m['hs']}/100"),
+                ("Sharpe Ratio",   f"{am['sharpe']:+.2f}" if am['sharpe'] else "—"),
+                ("Dividend Income",f"GHS {m['div']:,.2f}"),
+                ("Est. Fees Paid", f"GHS {total_fees:,.2f}"),
+                ("DRIP Upside",    f"+GHS {drip_value:,.2f}"),
+                ("Positions",      str(len(eq))),
+                ("Win Rate",       f"{m['winners']}/{len(eq)} ({m['winners']/len(eq)*100:.0f}%)"),
+                ("Sectors",        str(m['su'])),
+            ]
+            for label, val in rows:
+                st.markdown(
+                    f"<div class='stat-row' style='display:flex;justify-content:space-between;padding:7px 0;"
+                    f"border-bottom:1px solid {p.BORDER};font-size:.82rem;'>"
+                    f"<span style='color:{p.MUTED};font-family:Epilogue,sans-serif;'>{label}</span>"
+                    f"<span style='color:{p.TEXT};font-family:DM Mono,monospace;font-weight:500;'>{val}</span>"
+                    f"</div>",unsafe_allow_html=True)
+            st.markdown("</div>",unsafe_allow_html=True)
+        with r2:
+            st.plotly_chart(chart_sector_donut(eq),use_container_width=True)
+            st.plotly_chart(chart_pl_waterfall(eq),use_container_width=True)
 
     # ── Footer ────────────────────────────────────────────────────────────────
-    st.markdown("<div class='rich-divider'></div>", unsafe_allow_html=True)
-    generated = datetime.now().strftime("%d %b %Y · %H:%M")
+    st.markdown("<div class='rich-divider'></div>",unsafe_allow_html=True)
+    generated=datetime.now().strftime("%d %b %Y · %H:%M")
     st.markdown(f"""
-<div style="display:flex;justify-content:space-between;align-items:center;
-            flex-wrap:wrap;gap:12px;padding:4px 4px 20px;
-            font-size:.75rem;color:{p.MUTED};font-family:Epilogue,sans-serif;">
+<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;
+            padding:4px 4px 20px;font-size:.75rem;color:{p.MUTED};font-family:Epilogue,sans-serif;">
   <div style="display:flex;align-items:center;gap:8px;">
     <span style="font-size:1.1rem;">₵</span>
-    <span><b style='color:{GOLD};font-family:Fraunces,serif;font-size:.85rem;'>
-      IC Portfolio Analyser</b>
-      <span style='color:{p.BORDER2};margin:0 6px;'>·</span>Elite Edition v3.0
-    </span>
+    <span><b style='color:{GOLD};font-family:Fraunces,serif;font-size:.85rem;'>IC Portfolio Analyser</b>
+      <span style='color:{p.BORDER2};margin:0 6px;'>·</span>Elite Edition v4.0</span>
   </div>
   <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
     <span>Generated {generated}</span>
     <span style="color:{p.BORDER2};">|</span>
     <span>Prices: <a href='https://dev.kwayisi.org/apis/gse/' target='_blank'
-      style='color:{GOLD};text-decoration:none;font-weight:600;'>
-      dev.kwayisi.org/apis/gse</a></span>
+      style='color:{GOLD};text-decoration:none;font-weight:600;'>dev.kwayisi.org/apis/gse</a></span>
     <span style="color:{p.BORDER2};">|</span>
     <span>For informational purposes only</span>
     <span style="color:{p.BORDER2};">|</span>
     <span>Past performance does not guarantee future results</span>
   </div>
-</div>""", unsafe_allow_html=True)
+</div>""",unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
